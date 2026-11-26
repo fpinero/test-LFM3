@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 (Windows) completada. Fase 2 (Linux con 8 GB) en curso; fase 3 (Mac) pendiente.
+> Estado: fase 1 (Windows) y fase 2 (Linux con 8 GB) completadas; fase 3 (Mac) pendiente.
 
 ## Índice
 
@@ -15,7 +15,7 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
-5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram) (en curso)
+5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram)
 6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (pendiente)
 7. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
 8. [Resolución de problemas](#resolución-de-problemas)
@@ -1115,8 +1115,8 @@ Conclusiones:
 | Generación | ~24 tok/s | ~5,8 tok/s | ~9,6 tok/s |
 | Memoria del modelo (contexto 4K) | 1,9 GB | 1,9 GB | 1,2 GB |
 | Chat sencillo | Instantáneo | Usable, con paciencia | Fluido sin razonamiento |
-| Mini agente (una herramienta) | 10-16 s | 40-70 s | Pendiente |
-| Pi (5 tareas) | Rápido, todo correcto | Lento, todo correcto | Pendiente |
+| Mini agente (una herramienta) | 10-16 s | 40-70 s | No medido |
+| Pi (5 tareas) | Rápido, todo correcto | Lento, todo correcto | Facturas con QAD Q4_0: bastante más rápido y correcto |
 
 **¿Es viable LFM3 en un portátil de 2015 con 8 GB?** Sí, con matices:
 
@@ -1124,6 +1124,16 @@ Conclusiones:
 2. **La calidad no depende del hardware**: todas las tareas agénticas salieron igual de bien que en el equipo potente.
 3. **Para que sea cómodo hay que usar las dos palancas**: la cuantización Q4 (un 67 % más rápida) y desactivar el razonamiento en las tareas sencillas o bien especificadas.
 4. **La configuración del servicio importa**: `OLLAMA_KEEP_ALIVE` para conservar la caché del prompt entre peticiones (con un 94-99 % de acierto en Pi) y cerrar el navegador para no entrar en swap.
+
+**Configuración recomendada para un equipo de 8 GB con CPU modesta:**
+
+| Ajuste | Valor | Por qué |
+|---|---|---|
+| Modelo | `lfm3:1.7b-qad-q4_0` | ~10 tok/s frente a ~5,8 de la Q8, 1,1 GB en memoria y calidad agéntica validada |
+| Razonamiento | Desactivado en tareas bien especificadas; activado en tareas ambiguas o de varios pasos | El razonamiento multiplica el tiempo y es muy variable (de 505 a 1.150 tokens en la misma pregunta) |
+| `OLLAMA_KEEP_ALIVE` | `30m` o más | Conserva el modelo y la caché del prompt entre peticiones |
+| `OLLAMA_CONTEXT_LENGTH` | `32768` para agentes | Solo cuesta ~100 MB más que 8K gracias a las 6 capas de atención |
+| Entorno | Cerrar el navegador | Libera hasta 2 GiB y evita entrar en swap |
 
 ### Paso L6: validar la cuantización de 4 bits en tareas agénticas
 
@@ -1174,17 +1184,24 @@ Conclusiones:
 
 Elección para la prueba con Pi: **QAD Q4_0**, por ser la variante que Liquid AI ha preparado para 4 bits y salir igual o mejor en todo lo medido.
 
-Pendiente: repetir con Pi las tareas 4 y 5 (facturas y validación con `jq`) con `lfm3:1.7b-qad-q4_0`, para comprobar que la calidad agéntica se mantiene en 4 bits.
+#### Resultado con Pi y QAD Q4_0 (26/11/2026)
 
-### Pruebas de estrés previstas
+Se borraron los ficheros de la prueba anterior (`rm facturas.*`) y se repitió con `pi --model ollama/lfm3:1.7b-qad-q4_0` la tarea de facturas (crear `facturas.txt`, leerlo y generar `facturas.json` con claves y tipos explícitos):
 
-| Prueba | Qué medimos |
+- **Resultado correcto**, igual que con la Q8.
+- **Bastante más rápido** que con la Q8, en la línea del 67-75 % de velocidad extra medido con el banco de pruebas.
+
+Con esto la cuantización de 4 bits queda validada también en una tarea agéntica de varios pasos (escribir, leer, transformar y escribir), que era la duda que quedaba abierta.
+
+### Estado de las pruebas de estrés
+
+| Prueba | Estado |
 |---|---|
-| Línea base Q8 con `num_ctx` 4096 | tokens/s y RAM libre, para comparar con el PC Windows |
-| Q8 frente a Q4_K_M (`lfm3:1.7b`) | cuánto se gana en velocidad y memoria y cuánto se pierde en calidad |
-| Contexto creciente (4K, 32K, 64K, 128K) | crecimiento de la caché KV y punto en el que la máquina empieza a sufrir |
-| Mini agente y Pi | si un agente sigue siendo usable con poca memoria |
-| Peticiones en paralelo (`OLLAMA_NUM_PARALLEL`) | cómo se reparte la máquina entre varios usuarios o agentes |
+| Línea base Q8 con `num_ctx` 4096 | Hecha (pasos L1 y L2) |
+| Q8 frente a Q4_K_M y QAD Q4_0 | Hecha (pasos L5 y L6) |
+| Contexto creciente | Parcial: 4K, 8K y 32K medidos (1,9, 2,0 y 2,1 GB). Quedan 64K y 128K (opcional) |
+| Mini agente y Pi | Hecha (pasos L3, L4 y L6) |
+| Peticiones en paralelo (`OLLAMA_NUM_PARALLEL`) | Pendiente (opcional) |
 
 ## Fase 3: Mac (Apple Silicon)
 
