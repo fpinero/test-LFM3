@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Pendiente: Hermes (opcional) y fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Hermes Agent en curso; después, fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -515,9 +515,127 @@ La barra de estado de Pi indicaba `1.9%/262k`: Pi cree que el modelo dispone de 
 
 Y reabre Pi (o usa `/model` para recargar). El contador debería pasar a `.../32k`.
 
-#### 3.4 Hermes Agent (opcional, más adelante)
+#### 3.4 Hermes Agent
 
-Hermes Agent de Nous Research ya tiene instalador nativo para Windows (`install.ps1`) que se instala en `%LOCALAPPDATA%\hermes` y se integra con `ollama launch hermes`. Es mucho más pesado (descarga Python, Node.js, Chromium, FFmpeg...) y su *system prompt* y herramientas son mucho mayores, lo que en CPU significa más tiempo de prefill en cada turno. Lo probaremos después de Pi para comparar.
+[Hermes Agent](https://hermes-agent.nousresearch.com) de Nous Research es un arnés agéntico mucho más completo que Pi: memoria persistente, *skills* que se van mejorando, navegador, subagentes e integración con mensajería (Telegram, Slack...). Tiene instalador nativo para Windows que, según su documentación, **no requiere permisos de administrador**, y Ollama lo integra con `ollama launch hermes`.
+
+La pregunta que queremos responder: **¿un arnés grande aporta algo con un modelo de 1,7B en CPU, o el coste de su prompt lo hace peor que Pi?**
+
+##### 3.4.1 Qué instala y dónde
+
+| Ruta | Contenido |
+|---|---|
+| `%LOCALAPPDATA%\hermes\hermes-agent\` | Código fuente de Hermes |
+| `%LOCALAPPDATA%\hermes\bin\` | Lanzadores (se añaden al `PATH` de usuario) |
+| `%LOCALAPPDATA%\hermes\` | Configuración (`config.yaml`, `.env`), sesiones y logs |
+
+El instalador descarga uv, Python 3.14, Node.js, ripgrep, FFmpeg y, por defecto, Chromium y un controlador de *computer use*. Estos dos últimos no los necesitamos y los omitiremos con `-SkipBrowser -SkipComputerUse`. Igual que Pi, su herramienta de terminal usa **Git Bash**.
+
+##### 3.4.2 Ampliar el contexto a 64K
+
+El *system prompt* de Hermes y la definición de sus herramientas son bastante mayores que los de Pi. Para no quedarnos cortos, subimos el contexto del servidor a 65.536 tokens (con LFM3 el coste en RAM es pequeño):
+
+```powershell
+[Environment]::SetEnvironmentVariable("OLLAMA_CONTEXT_LENGTH", "65536", "User")
+```
+
+Sal de Ollama desde la bandeja, vuelve a abrirlo y abre un PowerShell nuevo.
+
+##### 3.4.3 Instalar Hermes revisando antes el script
+
+En lugar del típico `iex (irm ...)`, que ejecuta directamente lo que descarga, lo bajamos primero a un fichero para poder leerlo (buena práctica con cualquier instalador de Internet, y más en un equipo corporativo):
+
+```powershell
+mkdir $env:USERPROFILE\hermes-install -Force
+cd $env:USERPROFILE\hermes-install
+Invoke-RestMethod https://hermes-agent.nousresearch.com/install.ps1 -OutFile install-hermes.ps1
+notepad install-hermes.ps1     # échale un vistazo antes de ejecutarlo
+powershell -ExecutionPolicy Bypass -File .\install-hermes.ps1 -SkipBrowser -SkipComputerUse
+```
+
+Al terminar, abre un PowerShell nuevo (para recargar el `PATH`) y comprueba:
+
+```powershell
+hermes --version
+hermes doctor
+```
+
+`hermes doctor` revisa la instalación y avisa si falta algo (por ejemplo, Git Bash).
+
+##### 3.4.4 Conectar Hermes con LFM3
+
+Opción A, con Ollama:
+
+```powershell
+ollama launch hermes
+```
+
+En el selector elige `lfm3:1.7b-q8_0`. Si pregunta por plataformas de mensajería, sáltalo.
+
+Opción B, manual:
+
+```powershell
+hermes model
+```
+
+Elige *More providers...* > *Custom endpoint (enter URL manually)*, URL `http://127.0.0.1:11434/v1`, clave de API vacía, modelo `lfm3:1.7b-q8_0` y contexto `65536`.
+
+Para entender lo que ha configurado:
+
+```powershell
+Get-Content $env:LOCALAPPDATA\hermes\config.yaml
+hermes prompt-size      # tamaño del system prompt y de las herramientas
+```
+
+Anota lo que muestre `hermes prompt-size`: es la clave para comparar con los ~600 tokens del prompt de Pi.
+
+##### 3.4.5 Mismas tareas que con Pi
+
+Para que la comparación sea justa, usa una carpeta de pruebas nueva y las mismas tareas del apartado 3.3.4:
+
+```powershell
+mkdir $env:USERPROFILE\hermes-sandbox -Force
+cd $env:USERPROFILE\hermes-sandbox
+hermes
+```
+
+1. `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. La extracción de facturas a `facturas.json` (mismo texto que con Pi).
+5. `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Para cada tarea anota el tiempo aproximado hasta la respuesta, si acertó y si se atascó o repitió herramientas. Con `ollama ps` en otra ventana verás la RAM y el contexto.
+
+Plantilla para los resultados:
+
+| Tarea | Pi: tiempo | Pi: resultado | Hermes: tiempo | Hermes: resultado |
+|---|---|---|---|---|
+| 1. Versiones | | Correcto | | |
+| 2. Crear notas.md | | Correcto | | |
+| 3. Editar notas.md | | Correcto | | |
+| 4. Facturas a JSON | | Perfecto | | |
+| 5. Validar y sumar | | | | |
+
+##### 3.4.6 (Opcional) Adelgazar Hermes
+
+Si va lento o se confunde con tantas herramientas, desactiva los conjuntos que no hacen falta (web, memoria, navegador...) y repite una tarea:
+
+```powershell
+hermes tools            # activar o desactivar conjuntos de herramientas
+hermes prompt-size      # comprobar cuánto ha bajado el prompt
+```
+
+Con un modelo pequeño, **menos herramientas suele significar mejores decisiones**: hay menos opciones entre las que equivocarse y menos tokens que procesar en cada turno.
+
+##### 3.4.7 Desinstalar (cuando acabemos)
+
+```powershell
+hermes uninstall --dry-run   # muestra qué borraría
+hermes uninstall --full      # elimina también configuración y datos
+```
+
+La documentación recomienda no borrar `%LOCALAPPDATA%\hermes` a mano.
 
 ## Fase 2: Mac (Apple Silicon)
 
@@ -559,3 +677,4 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 - Pi con Ollama: <https://docs.ollama.com/integrations/pi>
 - Hermes con Ollama: <https://docs.ollama.com/integrations/hermes>
 - Instalación de Hermes Agent: <https://hermes-agent.nousresearch.com/docs/getting-started/installation>
+- Hermes en Windows nativo: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
