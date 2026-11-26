@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1, paso 1 (instalación del runtime y del modelo). Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1, paso 1 completado; paso 2 (chatbot y medición) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -13,7 +13,7 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
 3. [Elección del runtime sin permisos de administrador](#elección-del-runtime-sin-permisos-de-administrador)
 4. [Fase 1: Windows sin admin](#fase-1-windows-sin-admin)
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
-   - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia) (pendiente)
+   - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia) (en curso)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use) (pendiente)
 5. [Fase 2: Mac (Apple Silicon)](#fase-2-mac-apple-silicon) (pendiente)
 6. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
@@ -106,7 +106,21 @@ Por defecto los modelos se guardan en `%USERPROFILE%\.ollama\models`. Si tu perf
 [Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "D:\ollama\models", "User")
 ```
 
-Después cierra Ollama desde el icono de la bandeja y vuelve a abrirlo (y abre un PowerShell nuevo) para que lea la variable.
+Después cierra Ollama desde el icono de la bandeja (clic derecho > *Quit Ollama*), vuelve a abrirlo desde el menú Inicio y abre un PowerShell nuevo para que todo lea la variable. Comprueba que ha quedado guardada con:
+
+```powershell
+[Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "User")
+```
+
+> **Lección aprendida: `$env:` no es persistente.** En la primera prueba se definió la variable con `$env:OLLAMA_MODELS = "..."`. Eso solo vale para **esa ventana de PowerShell** y sus procesos hijos. La app de Ollama de la bandeja del sistema se arranca desde el Explorador de Windows, no hereda esa variable y por tanto siguió guardando los modelos en la ruta por defecto. Por eso `ollama list` mostraba el modelo (el cliente pregunta al servidor por la API) pero la carpeta nueva estaba vacía.
+>
+> Solución, sin admin:
+>
+> 1. Guardar la variable a nivel de usuario con `[Environment]::SetEnvironmentVariable(...)` como arriba (equivale a `setx OLLAMA_MODELS "ruta"`).
+> 2. Salir de Ollama desde la bandeja y volver a abrirlo.
+> 3. Si el modelo ya estaba descargado, no hace falta bajarlo otra vez: basta mover las carpetas `blobs` y `manifests` de `%USERPROFILE%\.ollama\models` a la nueva ruta **con Ollama cerrado**, y comprobar después con `ollama list`.
+>
+> En la carpeta verás ficheros con nombres tipo `sha256-...` dentro de `blobs` (los pesos GGUF, la plantilla y los parámetros) y en `manifests` el índice que relaciona el tag `lfm3:1.7b-q8_0` con esos blobs. Ollama almacena así los modelos para no duplicar capas compartidas entre tags.
 
 #### 1.4 Verificar la instalación
 
@@ -150,15 +164,122 @@ Escribe por ejemplo `Hola, preséntate en dos frases` y pulsa Enter. Con `--verb
 
 #### Resultado esperado del paso 1
 
-- [ ] `ollama --version` ≥ 0.40.13
-- [ ] `ollama list` muestra `lfm3:1.7b-q8_0`
-- [ ] `ollama show` indica `Q8_0` y la capacidad `tools`
-- [ ] El modelo responde en español
-- [ ] Anotado el `eval rate` de la primera respuesta: ____ tokens/s
+- [x] Ollama instalado sin admin
+- [x] `ollama list` muestra `lfm3:1.7b-q8_0` (ID `a329e3b38ec2`, 1,8 GB)
+- [x] El modelo responde en español
+- [x] Anotado el `eval rate` de la primera respuesta
+
+#### Resultados del paso 1 (PC Intel i5, 16 GB, 26/11/2026)
+
+Primera interacción con `ollama run --verbose` (una presentación personal):
+
+| Métrica | Valor | Qué significa |
+|---|---|---|
+| `load duration` | 4,3 ms | El modelo ya estaba cargado en memoria |
+| `prompt eval count` | 27 tokens | Tokens de entrada procesados |
+| `prompt eval rate` | **70,38 tokens/s** | Velocidad leyendo el prompt (prefill) |
+| `eval count` | 346 tokens | Tokens generados en la respuesta |
+| `eval rate` | **23,83 tokens/s** | Velocidad generando (decode), la que se nota al leer |
+| `total duration` | 14,9 s | Tiempo total de la respuesta |
+
+Unos 24 tokens/s solo con CPU es una velocidad de lectura cómoda (más rápida que lo que una persona lee). Observación cualitativa: la respuesta fue correcta en idioma y tono, pero **inventó detalles** sobre el sector (diseño de interiores, interfaces holográficas...) y fue más larga de lo necesario. Es esperable en un modelo de 1,7B sin instrucciones de sistema y con el muestreo por defecto; en el paso 2 se fijan un *system prompt* y la temperatura recomendada (0.1) para comparar.
 
 ### Paso 2: chatbot básico y medición de eficiencia
 
-Pendiente de validar el paso 1. Previsto: medir tokens/s y RAM (`ollama ps` y Administrador de tareas), probar el contexto y montar un chat sencillo contra la API local.
+Objetivo: dejar de usar `ollama run` y hablar con el modelo **a través de su API REST**, que es como lo hará después cualquier arnés agéntico. Para ello usamos un pequeño chatbot en PowerShell, [`scripts/chat.ps1`](scripts/chat.ps1), que no necesita instalar nada (ni Python ni Node).
+
+#### Cómo funciona un chat contra Ollama
+
+Ollama expone en `http://localhost:11434` una API propia (`/api/chat`) y otra compatible con OpenAI (`/v1/chat/completions`). El modelo **no tiene memoria**: en cada petición el cliente le envía toda la conversación como una lista de mensajes con su rol:
+
+```json
+{
+  "model": "lfm3:1.7b-q8_0",
+  "messages": [
+    { "role": "system", "content": "Eres un asistente útil..." },
+    { "role": "user", "content": "Hola" },
+    { "role": "assistant", "content": "¡Hola! ¿En qué te ayudo?" },
+    { "role": "user", "content": "Resume esto..." }
+  ],
+  "options": { "temperature": 0.1, "top_k": 50, "repeat_penalty": 1.1, "num_ctx": 4096 },
+  "stream": false
+}
+```
+
+- `system`: instrucciones fijas que condicionan el comportamiento (tono, idioma, límites).
+- `options`: parámetros de muestreo recomendados por Liquid AI y tamaño de la ventana de contexto (`num_ctx`).
+- La respuesta incluye el texto y las métricas (`eval_count`, `eval_duration`, etc.), que el script convierte a tokens/s.
+
+El script mantiene ese historial, muestra las métricas tras cada respuesta, consulta `/api/ps` para ver la memoria que ocupa el modelo y lo guarda todo en `scripts/metricas.csv`.
+
+#### 2.1 Traer el script al PC
+
+Con git (si está disponible):
+
+```powershell
+git clone https://github.com/fpinero/test-LFM3.git
+cd test-LFM3
+git checkout claude/project-thread-ni4g59
+```
+
+Sin git: descarga el fichero desde GitHub (botón *Download raw file*) a una carpeta, por ejemplo `C:\Users\<usuario>\test-LFM3\scripts\`.
+
+#### 2.2 Ejecutarlo sin admin
+
+Windows puede bloquear scripts `.ps1` descargados. Sin permisos de administrador hay dos opciones:
+
+```powershell
+# Opción A: saltar la política solo para esta ejecución
+powershell -ExecutionPolicy Bypass -File .\scripts\chat.ps1
+
+# Opción B: permitir scripts locales para tu usuario (una sola vez)
+Unblock-File .\scripts\chat.ps1
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\scripts\chat.ps1
+```
+
+Si una directiva de grupo de la empresa impide la opción B, la opción A suele funcionar.
+
+Parámetros útiles:
+
+```powershell
+.\scripts\chat.ps1 -NumCtx 16384                      # ventana de contexto mayor
+.\scripts\chat.ps1 -NoThink                           # desactiva el razonamiento previo
+.\scripts\chat.ps1 -System "Responde siempre en una sola frase."
+```
+
+Dentro del chat: `/reset` borra el historial, `/stats` muestra la memoria usada y `/bye` sale.
+
+#### 2.3 Batería de pruebas
+
+Ejecuta estas cuatro pruebas y anota las métricas que imprime el script:
+
+1. **Presentación** (comparar con el paso 1): `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.`
+2. **Extracción estructurada** (su punto fuerte): `Extrae en JSON con las claves nombre, empresa, fecha y importe: "Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz".`
+3. **Seguir instrucciones**: `Dame exactamente 3 ventajas de Kubernetes, cada una en menos de 10 palabras, en lista numerada.`
+4. **Memoria de la conversación**: `¿Cómo me llamo y a qué me dedico?` (debe recordarlo de la prueba 1).
+
+Después, repite la prueba 2 con `-NoThink` y compara tiempos y calidad.
+
+#### 2.4 Medir la memoria RAM
+
+Con el chat abierto, en otra ventana de PowerShell:
+
+```powershell
+ollama ps
+Get-Process ollama* | Select-Object Name, Id, @{n="RAM_MB";e={[math]::Round($_.WorkingSet64/1MB)}}
+```
+
+- `ollama ps` muestra el tamaño del modelo cargado, si está en CPU o GPU y cuánto tiempo seguirá en memoria (por defecto 5 minutos sin uso).
+- `Get-Process` muestra la RAM real de los procesos de Ollama (el servidor y el *runner* que ejecuta el modelo).
+- Prueba también con `-NumCtx 32768` para ver cuánto crece la memoria al ampliar el contexto (la caché KV crece con él).
+
+#### Resultado esperado del paso 2
+
+- [ ] El script conversa y recuerda el historial
+- [ ] Tabla de métricas de las 4 pruebas (tokens/s de prefill y de generación)
+- [ ] RAM con `num_ctx` 4096 y 32768
+- [ ] Comparación con y sin razonamiento (`-NoThink`)
 
 ### Paso 3: arnés agéntico con tool use
 
