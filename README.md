@@ -55,9 +55,9 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 | | Fase 1 | Fase 2 | Fase 3 |
 |---|---|---|---|
-| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Máquina Linux | Mac (Apple Silicon) |
-| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **8 GB** | Por definir |
-| Sistema | Windows | Linux (distribución por confirmar), Intel Core i5 | macOS |
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | Mac (Apple Silicon) |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | Por definir |
+| Sistema | Windows | Ubuntu 24.04.5 LTS | macOS |
 | Permisos | **Sin administrador** | root / sudo | Administrador |
 | Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
 | Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
@@ -677,6 +677,25 @@ Por qué importa cada dato:
 - **Núcleos:** la generación en CPU escala con los núcleos físicos hasta que el cuello de botella pasa a ser el ancho de banda de memoria.
 - **Node.js:** `npm 9.2.0` suele venir con Node.js 18 (el de los repositorios de Debian/Ubuntu), insuficiente para Pi. Lo resolveremos al llegar a ese paso.
 
+#### Resultados del paso L0 (26/11/2026)
+
+| Dato | Valor | Lectura |
+|---|---|---|
+| Sistema | Ubuntu 24.04.5 LTS, x86_64 | Soportado por Ollama sin problemas |
+| CPU | Intel Core i5-5200U a 2,2 GHz (Broadwell, 2015), **2 núcleos y 4 hilos** | Frente a los 12 núcleos del PC Windows: esperamos bastante menos velocidad |
+| Instrucciones | **AVX2** sí; AVX-512 y AVX-VNNI no | Lo mínimo para que llama.cpp vaya razonablemente bien |
+| RAM | 7,7 GiB total, **2,8 GiB disponibles** (4,9 GiB usados con el escritorio y las apps abiertas) | El modelo Q8 (~1,9 GB) cabe, pero muy justo |
+| Swap | 12 GiB, prácticamente sin usar | Red de seguridad, pero si el modelo acaba en swap la velocidad se desploma |
+| Disco | 309 GB libres | Sin problema |
+| Node.js | v18.19.1 (`/usr/bin/node`, paquete de Ubuntu) | Insuficiente para Pi (22.19 o superior); lo actualizaremos en su paso |
+| Python | `python3` de Homebrew (`/home/linuxbrew/...`) | Disponible para los scripts de Linux |
+
+Conclusiones antes de instalar:
+
+- **La memoria es el factor crítico.** Con solo 2,8 GiB disponibles, conviene **cerrar el navegador y las aplicaciones pesadas** antes de las pruebas y anotar `free -h` en cada medición. Si `available` baja de unos 500 MB con el modelo cargado, Linux empezará a usar swap.
+- **Previsión de velocidad:** en CPU, generar cada token obliga a leer todos los pesos (1,8 GB) de memoria. Con 2 núcleos de 2015 y memoria DDR3 esperamos una velocidad de generación **muy inferior a los 24 tok/s** del PC Windows, quizá en el rango de un solo dígito. El paso L1 lo confirmará.
+- Si la Q8 resulta demasiado justa, la alternativa natural es la **Q4_K_M** (`lfm3:1.7b`, 1,1 GB): menos memoria y más velocidad a cambio de algo de precisión. Es justo una de las comparaciones previstas.
+
 ### Paso L1: instalar Ollama y el modelo
 
 En este equipo sí tenemos `sudo`, así que usamos el **instalador oficial**, que deja Ollama como un servicio de `systemd` (arranca solo con el sistema y se gestiona con `systemctl`). Es la gran diferencia con Windows, donde Ollama era una app de usuario en la bandeja.
@@ -708,6 +727,8 @@ journalctl -u ollama -f                   # Ctrl+C para salir
 Nota: al ser un servicio, Ollama guarda los modelos en `/usr/share/ollama/.ollama/models` (el home del usuario `ollama`), no en tu home. Las variables de entorno como `OLLAMA_MODELS` u `OLLAMA_CONTEXT_LENGTH` **no se ponen en tu `.bashrc`** (el servicio no lo lee), sino en el propio servicio con `sudo systemctl edit ollama`. Es la versión Linux de la lección de `$env:` en Windows. Lo usaremos más adelante.
 
 #### L1.3 Medir la memoria antes de cargar el modelo
+
+Cierra el navegador y las aplicaciones que no necesites, y después:
 
 ```bash
 free -h
