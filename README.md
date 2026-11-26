@@ -1079,6 +1079,80 @@ pi --model ollama/lfm3:1.7b
 
 (Antes hay que añadir `{ "id": "lfm3:1.7b", "contextWindow": 32768 }` a la lista de modelos de `~/.pi/agent/models.json`.)
 
+#### Resultados del paso L5 (26/11/2026)
+
+Salida de `python3 scripts/bench.py` (`num_ctx` 4096, 1 repetición):
+
+| Modelo | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | RSS máx. runner (MB) | RAM disponible mín. (MB) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b-q8_0` | no | 5.78 | 45 | 11.4 | 1922 | 2922 | ok |
+| `lfm3:1.7b-q8_0` | sí | 5.70 | 482 | 85.1 | 1944 | 2986 | ok |
+| `lfm3:1.7b` (Q4_K_M) | no | 9.63 | 38 | 6.3 | 1211 | 3889 | ok |
+| `lfm3:1.7b` (Q4_K_M) | sí | 9.28 | 266 | 29.2 | 1228 | 3756 | ok |
+
+Detalle por prueba:
+
+| Prueba | Q8 sin razonar | Q8 razonando | Q4 sin razonar | Q4 razonando |
+|---|---|---|---|---|
+| Presentación | 60 tok, 12,5 s | 164 tok, 29,3 s | 38 tok, 5,7 s | 140 tok, 15,1 s |
+| JSON (claves explícitas) | 49 tok, 13,7 s, ok | 823 tok, 146,4 s, ok | 49 tok, 8,3 s, ok | 464 tok, 51,7 s, ok |
+| 3 ventajas de Kubernetes | 27 tok, 8,0 s | 459 tok, 79,7 s | 27 tok, 4,8 s | 193 tok, 20,7 s |
+| Carga del modelo | 6,2 s | | 3,8 s | |
+
+Conclusiones:
+
+- **La Q4_K_M genera un 67 % más rápido** (9,6 frente a 5,8 tok/s), muy cerca de lo que predice la teoría: lee 1,1 GB por token en lugar de 1,8 GB. En CPU, **la velocidad de generación es inversamente proporcional al tamaño del modelo en memoria**.
+- **Ahorra unos 700 MB de RAM** (RSS de 1,2 GB frente a 1,9 GB) y carga en 3,8 s frente a 6,2 s. En una máquina de 8 GB eso es casi 1 GB más de margen para el sistema y el navegador.
+- **Sin pérdida de calidad apreciable en estas pruebas**: el JSON salió exacto en los cuatro casos.
+- **Combinando Q4 y sin razonamiento, la respuesta media baja de 85 s a 6 s** respecto a Q8 razonando. Son dos palancas independientes: la cuantización acelera cada token y el modo sin razonamiento reduce cuántos tokens se generan.
+- **El número de tokens de razonamiento varía mucho** (823 frente a 464 en el mismo JSON). Con una sola repetición no se puede afirmar que la Q4 razone "menos"; es la variabilidad propia del razonamiento. Para afinar, `--repeticiones 3`.
+- **Matiz importante**: estas pruebas son de una sola respuesta. La Q8 se recomendó en la charla por su fiabilidad en tareas agénticas largas, donde los pequeños errores de una cuantización más agresiva se acumulan paso a paso. Falta comprobar la Q4 con Pi.
+
+### Conclusiones de la fase Linux (8 GB)
+
+| | Windows, Core Ultra 5 135U, 31 GB | Linux, i5-5200U, 8 GB, Q8 | Linux, i5-5200U, 8 GB, Q4_K_M |
+|---|---|---|---|
+| Generación | ~24 tok/s | ~5,8 tok/s | ~9,6 tok/s |
+| Memoria del modelo (contexto 4K) | 1,9 GB | 1,9 GB | 1,2 GB |
+| Chat sencillo | Instantáneo | Usable, con paciencia | Fluido sin razonamiento |
+| Mini agente (una herramienta) | 10-16 s | 40-70 s | Pendiente |
+| Pi (5 tareas) | Rápido, todo correcto | Lento, todo correcto | Pendiente |
+
+**¿Es viable LFM3 en un portátil de 2015 con 8 GB?** Sí, con matices:
+
+1. **Cabe con holgura**: incluso con 32K de contexto el modelo Q8 no pasa de 2,1 GB, gracias a sus pocas capas de atención. El factor limitante no es la memoria sino la velocidad de la CPU y de la RAM.
+2. **La calidad no depende del hardware**: todas las tareas agénticas salieron igual de bien que en el equipo potente.
+3. **Para que sea cómodo hay que usar las dos palancas**: la cuantización Q4 (un 67 % más rápida) y desactivar el razonamiento en las tareas sencillas o bien especificadas.
+4. **La configuración del servicio importa**: `OLLAMA_KEEP_ALIVE` para conservar la caché del prompt entre peticiones (con un 94-99 % de acierto en Pi) y cerrar el navegador para no entrar en swap.
+
+### Paso L6: validar la cuantización de 4 bits en tareas agénticas
+
+Liquid AI publica además una variante **QAD Q4_0** (`lfm3:1.7b-qad-q4_0`, 1,0 GB). QAD (*quantization-aware distillation*) significa que el modelo se ha reentrenado para funcionar bien en 4 bits, en lugar de cuantizarse después sin más, así que en principio debería conservar mejor la calidad que la Q4_K_M. Es la candidata natural para esta máquina.
+
+1. Comparar las dos variantes de 4 bits (y de paso repetir para tener promedios):
+
+   ```bash
+   ollama pull lfm3:1.7b-qad-q4_0
+   python3 scripts/bench.py --models lfm3:1.7b lfm3:1.7b-qad-q4_0 --repeticiones 2
+   ```
+
+2. Repetir con Pi las tareas 4 y 5 (facturas y validación con `jq`) usando la mejor de las dos. Antes, añade los modelos de 4 bits a `~/.pi/agent/models.json` con su `contextWindow`:
+
+   ```json
+   "models": [
+     { "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 },
+     { "id": "lfm3:1.7b", "contextWindow": 32768 },
+     { "id": "lfm3:1.7b-qad-q4_0", "contextWindow": 32768 }
+   ]
+   ```
+
+   ```bash
+   cd ~/pi-sandbox && rm -f facturas.txt facturas.json
+   pi --model ollama/lfm3:1.7b-qad-q4_0
+   ```
+
+   Anota el tiempo de cada tarea para compararlo con la Q8.
+
 ### Pruebas de estrés previstas
 
 | Prueba | Qué medimos |
