@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1, pasos 1 y 2 completados; paso 3 (agente con herramientas) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1, pasos 1, 2 y 3.2 completados; paso 3.3 (Pi) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -54,8 +54,8 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 | | Fase 1 | Fase 2 |
 |---|---|---|
-| Equipo | PC del trabajo, Intel Core i5 con NPU | Mac (Apple Silicon) |
-| RAM | 16 GB | Por definir |
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Mac (Apple Silicon) |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | Por definir |
 | Sistema | Windows | macOS |
 | Permisos | **Sin administrador** | Administrador |
 | Formato del modelo | GGUF Q8_0 | MLX 8 bits |
@@ -169,7 +169,7 @@ Escribe por ejemplo `Hola, preséntate en dos frases` y pulsa Enter. Con `--verb
 - [x] El modelo responde en español
 - [x] Anotado el `eval rate` de la primera respuesta
 
-#### Resultados del paso 1 (PC Intel i5, 16 GB, 26/11/2026)
+#### Resultados del paso 1 (Intel Core Ultra 5 135U, 26/11/2026)
 
 Primera interacción con `ollama run --verbose` (una presentación personal):
 
@@ -274,7 +274,7 @@ Get-Process ollama* | Select-Object Name, Id, @{n="RAM_MB";e={[math]::Round($_.W
 - `Get-Process` muestra la RAM real de los procesos de Ollama (el servidor y el *runner* que ejecuta el modelo).
 - Prueba también con `-NumCtx 32768` para ver cuánto crece la memoria al ampliar el contexto (la caché KV crece con él).
 
-#### Resultados del paso 2 (PC Intel i5, 16 GB, 26/11/2026)
+#### Resultados del paso 2 (Intel Core Ultra 5 135U, 26/11/2026)
 
 Configuración: `scripts/chat.ps1`, `num_ctx` 4096, `temperature` 0.1, razonamiento activado.
 
@@ -365,14 +365,124 @@ Qué observar:
 - Si encadena varias herramientas cuando hace falta.
 - Si se inventa datos en lugar de usar las herramientas (alucinación).
 
-#### 3.3 Pi coding agent (pendiente)
+#### Resultados del paso 3.2 (26/11/2026)
 
-Pendiente de validar el mini agente. Plan previsto:
+| Prueba | Modo | Herramientas usadas | Pasos | Tokens generados | Tiempo | Resultado |
+|---|---|---|---|---|---|---|
+| Día de la semana | think | `obtener_fecha_hora` | 2 | 131 | 16,3 s | Correcto (jueves) |
+| RAM libre y procesador | think | `info_sistema` | 2 | 208 | 12,0 s | Correcto (10,8 GB libres, Core Ultra 5 135U) |
+| Ficheros de `scripts` | think | `listar_ficheros("scripts")` | 2 | 177 | 9,6 s | Correcto |
+| Listar y leer el chat, resumir en 3 frases | think | `leer_fichero` | 2 | 625 | 52,1 s | Correcto y detallado |
+| Igual, sin razonamiento | no think | `listar_ficheros` + `leer_fichero` | 3 | 184 | 30,5 s | Correcto pero más pobre |
+| ¿Existe `config.yaml`? | think | `listar_ficheros(".")` | 2 | 741 | 38,6 s | Correcto, **no alucinó** |
 
-- **Por qué Pi primero:** es un arnés mínimo, con un *system prompt* corto y solo cuatro herramientas (`read`, `write`, `edit`, `bash`), lo que encaja con un modelo pequeño en CPU. Ollama lo integra con `ollama launch pi`.
-- **Requisitos sin admin:** Node.js (vale la versión portable en zip, añadida al `PATH` de usuario) y Git for Windows (Pi usa bash para su herramienta de comandos).
-- **Contexto:** subir el contexto por defecto de Ollama con la variable de usuario `OLLAMA_CONTEXT_LENGTH` (por ejemplo 32768), porque 4096 se queda corto para un agente.
-- **Configuración:** `%USERPROFILE%\.pi\agent\models.json` apuntando a `http://localhost:11434/v1` con el modelo `lfm3:1.7b-q8_0`.
+Conclusiones:
+
+- **El tool calling funciona de forma fiable**: eligió siempre la herramienta adecuada, con argumentos bien formados (`{"ruta":"scripts/chat.ps1"}`), y no inventó datos que debía consultar.
+- **Usa el contexto de forma inteligente**: en la prueba 4 con razonamiento se saltó `listar_ficheros` porque ya tenía el listado de la prueba anterior en el historial. Sin historial (sesión nueva con `-NoThink`) encadenó las dos herramientas, como se esperaba.
+- **El razonamiento se escribe en inglés** aunque la respuesta final sale en español. Es habitual en modelos pequeños: el entrenamiento del razonamiento es mayoritariamente en inglés.
+- **Razonar cuesta tiempo**: el razonamiento multiplica los tokens generados (625 frente a 184) y, a 24 tok/s, eso son segundos. Sin razonamiento va más rápido pero las respuestas son escuetas, hasta el punto de perder información útil. Para tareas agénticas sencillas `-NoThink` puede bastar; para resumir o analizar compensa razonar.
+- **La CPU llega al 100 %** durante la inferencia: es esperable, Ollama usa todos los núcleos para el cálculo. Mientras el modelo genera, el equipo va más lento para otras tareas.
+- **Dato corregido del entorno**: la herramienta `info_sistema` reveló que el equipo es un **Intel Core Ultra 5 135U** (12 núcleos, 14 hilos) con **31,4 GB de RAM** visibles, no 16 GB.
+
+#### 3.3 Pi coding agent
+
+[Pi](https://pi.dev) es un arnés agéntico minimalista para terminal: un *system prompt* de unos 600 tokens y cuatro herramientas por defecto (`read`, `write`, `edit` y `bash`). Al ser tan ligero encaja bien con un modelo pequeño en CPU, donde cada token de prompt cuesta tiempo. Ollama lo integra con el comando `ollama launch pi`.
+
+> **Aviso de seguridad:** a diferencia de nuestro mini agente, Pi puede **escribir ficheros y ejecutar comandos** en tu equipo, y por diseño no pide confirmación antes de hacerlo. Trabajaremos siempre en una carpeta de pruebas aislada.
+
+##### 3.3.1 Comprobar requisitos (sin admin)
+
+```powershell
+node -v                     # Pi necesita Node.js 22.19 o superior
+npm config get prefix       # dónde instala npm los paquetes globales
+git --version               # Git for Windows aporta el bash que usa Pi
+Get-Command bash -ErrorAction SilentlyContinue | Select-Object Source
+```
+
+- `npm config get prefix` debería apuntar a tu perfil (normalmente `C:\Users\<usuario>\AppData\Roaming\npm`). Si es así, `npm install -g` **no necesita admin**. Si apunta a `C:\Program Files\...`, cámbialo para tu usuario con `npm config set prefix "$env:APPDATA\npm"`.
+- En Windows nativo Pi ejecuta su herramienta `bash` con **Git Bash**. Si no se encuentra, se puede indicar la ruta con `shellPath` en la configuración de Pi.
+
+##### 3.3.2 Ampliar el contexto de Ollama
+
+Un agente envía en cada petición su *system prompt*, la definición de las herramientas y todo el historial, incluidos los resultados de las herramientas (por ejemplo, un fichero leído entero). Los 4.096 tokens por defecto de Ollama se quedan cortos. Además, Pi habla con Ollama por su API compatible con OpenAI, que **no permite fijar `num_ctx` en cada petición**: hay que subirlo en el servidor.
+
+```powershell
+[Environment]::SetEnvironmentVariable("OLLAMA_CONTEXT_LENGTH", "32768", "User")
+```
+
+Sal de Ollama desde la bandeja (*Quit Ollama*), vuelve a abrirlo y abre un PowerShell nuevo (es la misma lección que con `OLLAMA_MODELS`). Gracias a que LFM3 solo tiene 6 capas de atención, la caché KV crece poco con el contexto y 32K caben de sobra en RAM.
+
+##### 3.3.3 Instalar y lanzar Pi con LFM3
+
+```powershell
+mkdir $env:USERPROFILE\pi-sandbox
+cd $env:USERPROFILE\pi-sandbox
+ollama launch pi --model lfm3:1.7b-q8_0
+```
+
+`ollama launch pi` instala Pi con npm si no está (paquete `@earendil-works/pi-coding-agent`), configura Ollama como proveedor y abre una sesión interactiva con el modelo indicado. En otra ventana, comprueba que el contexto ha subido:
+
+```powershell
+ollama ps    # la columna CONTEXT debería mostrar 32768
+```
+
+Para entender qué ha configurado, mira los ficheros que ha creado:
+
+```powershell
+Get-Content $env:USERPROFILE\.pi\agent\models.json
+Get-Content $env:USERPROFILE\.pi\agent\settings.json
+```
+
+Alternativa manual, si `ollama launch` fallase:
+
+```powershell
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+Y en `%USERPROFILE%\.pi\agent\models.json`:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [{ "id": "lfm3:1.7b-q8_0" }]
+    }
+  }
+}
+```
+
+Después se lanza con `pi --model ollama/lfm3:1.7b-q8_0`.
+
+##### 3.3.4 Tareas agénticas
+
+Dentro de Pi, en la carpeta `pi-sandbox`, de menos a más complejidad:
+
+1. **Ejecutar comandos:** `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. **Crear un fichero:** `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. **Leer y editar:** `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. **Extracción estructurada (su punto fuerte), con la lección del paso 2 aplicada:**
+
+   ```text
+   Crea un fichero facturas.txt con estas tres líneas:
+   Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz
+   Factura de Recambios Norte S.A. emitida el 15 de abril de 2026 por 89,90 euros a nombre de Luis Gómez
+   Factura de Neumáticos Sur S.L. emitida el 2 de mayo de 2026 por 432,00 euros a nombre de Marta Pérez
+   Después léelo y genera facturas.json con una lista de objetos con las claves emisor (empresa), cliente (persona), fecha (formato AAAA-MM-DD) e importe (número con punto decimal, sin moneda).
+   ```
+
+5. **Comprobar su propio trabajo:** `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Qué observar: si las llamadas a herramientas salen bien formadas, si se recupera cuando un comando falla, cuánto tarda cada turno (el prompt de Pi más el historial hacen que el prefill pese más que en el mini agente) y la RAM con `ollama ps`.
+
+Para medir una tarea de forma aislada se puede usar el modo no interactivo de Pi:
+
+```powershell
+Measure-Command { pi --model ollama/lfm3:1.7b-q8_0 -p "Crea hola.txt con el texto Hola desde LFM3" | Out-Host }
+```
 
 #### 3.4 Hermes Agent (opcional, más adelante)
 
