@@ -912,6 +912,113 @@ Después, aplica lo aprendido sobre el razonamiento: escribe `/think off`, repit
 
 Qué observar: si elige bien las herramientas, si encadena varias cuando hace falta, el tiempo total de cada prueba y, con `ollama ps` y `free -h` en otra terminal, la memoria (el mini agente usa `num_ctx` 8192).
 
+#### Resultados del paso L3 (26/11/2026)
+
+Todas con razonamiento activado:
+
+| Prueba | Herramientas usadas | Pasos | Tokens generados | Tiempo | Resultado |
+|---|---|---|---|---|---|
+| 1. Día de la semana | `obtener_fecha_hora` | 2 | 138 | 47,9 s | Correcto (jueves) |
+| 2. RAM disponible y procesador | `info_sistema` | 2 | 218 | 69,6 s | Correcto (2,7 GB, i5-5200U) |
+| 3. Ficheros de `scripts` | `listar_ficheros("scripts")` | 2 | 176 | 39,4 s | Correcto |
+| 4. Listar, leer `chat.py` y resumir (tras `/reset`) | `listar_ficheros` + `leer_fichero` | 3 | 863 | **254,2 s** | Correcto y preciso |
+
+Memoria durante las pruebas (con Chrome cerrado):
+
+| Medida | Valor |
+|---|---|
+| Modelo cargado (`ollama ps`) | 2,0 GB, 100 % CPU, contexto **8192** (frente a 1,9 GB con 4096) |
+| RAM disponible (`free -h`) | **4,5 GiB** (frente a 2,6 GiB con Chrome abierto) |
+
+Conclusiones:
+
+- **El tool calling es igual de fiable que en Windows**: herramienta correcta en todos los casos, argumentos bien formados y, en la prueba 4, el encadenamiento completo `listar_ficheros` → identificar `chat.py` entre cinco ficheros → `leer_fichero("scripts/chat.py")` → resumen correcto en tres frases.
+- **Razona de forma más directa que en el chat**: con herramientas, cada paso tiene un objetivo concreto ("llamar a X", "responder con el resultado") y el razonamiento es corto (138 a 218 tokens en las preguntas simples). La deriva del paso L2 apareció en una pregunta abierta, sin herramientas que acotasen la tarea.
+- **El tiempo por pregunta es alto**: unos 40 a 70 s en las preguntas de una sola herramienta y más de 4 minutos en la de varios pasos. Cada paso del bucle es una llamada completa al modelo (prefill del historial, que crece con cada resultado de herramienta, más el razonamiento a ~5 tok/s). En la prueba 4, leer `chat.py` metió unos 4.000 caracteres en el contexto, que el modelo tuvo que procesar antes de responder.
+- **Subir el contexto de 4K a 8K solo añadió ~100 MB**: gracias a que LFM3 tiene solo 6 capas de atención, la caché KV es pequeña. Esto es lo que permite pensar en 32K para Pi incluso con 8 GB.
+- **Cerrar Chrome liberó casi 2 GiB**: en una máquina de 8 GB, el navegador compite directamente con el modelo.
+
+Pendiente de esta batería (opcional): repetir las preguntas 1 a 3 con `/think off` para medir cuánto se ahorra en las llamadas simples, y la prueba de `config.yaml`.
+
+### Paso L4: Pi coding agent en Linux
+
+Mismo arnés que en Windows, ahora en una máquina con una cuarta parte de la potencia. Aquí Pi usa el bash nativo de Linux, sin necesidad de Git Bash.
+
+#### L4.1 Actualizar Node.js
+
+Pi necesita **Node.js 22.19 o superior** y el equipo tiene la versión 18.19.1 del paquete de Ubuntu. En lugar de tocar el Node del sistema, aprovechamos que ya está instalado **Homebrew para Linux** (el `python3` viene de ahí) e instalamos un Node moderno en paralelo:
+
+```bash
+brew install node
+hash -r                 # que bash olvide la ruta antigua de node
+which node              # debe apuntar a /home/linuxbrew/.linuxbrew/bin/node
+node -v                 # 22.19 o superior
+npm -v
+```
+
+Como Homebrew está antes que `/usr/bin` en el `PATH`, su `node` tiene prioridad y el paquete de Ubuntu queda intacto. Si `which node` siguiera mostrando `/usr/bin/node`, abre una terminal nueva.
+
+Alternativa sin Homebrew: [nvm](https://github.com/nvm-sh/nvm), que instala versiones de Node en el home del usuario (`nvm install 24`).
+
+#### L4.2 Configurar el servicio de Ollama: contexto y permanencia en memoria
+
+Igual que en Windows hay que subir el contexto, pero en Linux **las variables se configuran en el servicio de systemd**, no en `.bashrc`:
+
+```bash
+sudo systemctl edit ollama
+```
+
+Se abre un editor con un fichero de *override*. Añade en la zona indicada:
+
+```ini
+[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=32768"
+Environment="OLLAMA_KEEP_ALIVE=30m"
+```
+
+Guarda, sal y aplica:
+
+```bash
+sudo systemctl restart ollama
+systemctl show ollama --property=Environment     # comprobar que las ve
+```
+
+- `OLLAMA_CONTEXT_LENGTH=32768`: contexto por defecto para peticiones que no fijan `num_ctx`, como las de Pi a través de la API compatible con OpenAI.
+- `OLLAMA_KEEP_ALIVE=30m`: mantiene el modelo cargado 30 minutos sin uso (por defecto son 5). En el paso L3, `ollama ps` mostraba que se iba a descargar en segundos; recargarlo cuesta unos 5 s y, sobre todo, **se pierde la caché del prompt**, que en esta máquina es oro.
+
+El fichero de override queda en `/etc/systemd/system/ollama.service.d/override.conf` y sobrevive a las actualizaciones de Ollama.
+
+#### L4.3 Instalar y lanzar Pi con LFM3
+
+Con Chrome cerrado:
+
+```bash
+mkdir -p ~/pi-sandbox && cd ~/pi-sandbox
+ollama launch pi --model lfm3:1.7b-q8_0
+```
+
+Si `npm install -g` fallase por permisos (el prefijo global apunta a una carpeta del sistema), con el Node de Homebrew no debería ocurrir, porque su prefijo está en `/home/linuxbrew`.
+
+Aplica desde el principio la lección de Windows: edita `~/.pi/agent/models.json` para que Pi conozca el contexto real y reabre Pi:
+
+```json
+"models": [{ "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 }]
+```
+
+**Aviso de rendimiento:** el primer turno de Pi tendrá que procesar su *system prompt* y la definición de herramientas (unos miles de tokens) a ~20-100 tok/s, así que puede tardar un minuto o más en empezar a responder. A partir del segundo turno la caché del prompt hace el trabajo (en Windows el acierto de caché fue del 96 %).
+
+#### L4.4 Tareas
+
+Las mismas cinco del apartado 3.3.4 de Windows, en `~/pi-sandbox`:
+
+1. `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. La extracción de facturas a `facturas.json` (mismo texto que en Windows).
+5. `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Anota el tiempo de cada tarea y, en otra terminal, `ollama ps` y `free -h` para ver la memoria con 32K de contexto. La barra de estado de Pi muestra los tokens enviados y recibidos y el porcentaje de acierto de caché.
+
 ### Pruebas de estrés previstas
 
 | Prueba | Qué medimos |
@@ -955,6 +1062,8 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 | `ii: command not found` dentro de Pi | Pi ejecuta comandos con Git Bash, no con PowerShell | Usar sintaxis bash, por ejemplo `explorer.exe .` |
 | Pi muestra `.../262k` de contexto | Pi lee el máximo nativo del modelo, no el de Ollama | Añadir `contextWindow: 32768` en `models.json` |
 | Defender bloquea `python.exe` o `whoami.exe`/`tar.exe` al instalar Hermes | Reglas ASR de prevalencia y de herramientas del sistema suplantadas | Pedir exclusión a TI, usar VM/Dev Box/WSL o probarlo en otro equipo |
+| Una variable de Ollama no tiene efecto en Linux | El servicio systemd no lee `.bashrc` ni el entorno de la terminal | `sudo systemctl edit ollama` con `Environment=...` y `sudo systemctl restart ollama` |
+| `node -v` sigue mostrando 18 tras `brew install node` | bash recuerda la ruta antigua | `hash -r` o abrir una terminal nueva |
 | Logs del servidor | | `%LOCALAPPDATA%\Ollama` |
 
 ## Referencias
