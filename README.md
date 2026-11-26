@@ -764,10 +764,84 @@ Sal con `/bye`.
 
 #### Resultado esperado del paso L1
 
-- [ ] Servicio `ollama` activo y versión 0.40.13 o superior
-- [ ] `lfm3:1.7b-q8_0` descargado (`Q8_0`, capacidad `tools`)
-- [ ] `eval rate` y `prompt eval rate` de la primera respuesta
-- [ ] RAM disponible antes y después de cargar el modelo
+- [x] Servicio `ollama` activo
+- [x] `lfm3:1.7b-q8_0` descargado
+- [x] `eval rate` y `prompt eval rate` de la primera respuesta
+- [x] RAM disponible antes y después de cargar el modelo
+
+#### Resultados del paso L1 (26/11/2026)
+
+Misma presentación que en Windows, con `ollama run --verbose`:
+
+| Métrica | Linux i5-5200U | Windows Core Ultra 5 135U | Relación |
+|---|---|---|---|
+| `prompt eval rate` (prefill) | **17,48 tok/s** | 70,38 tok/s | 4 veces más lento |
+| `eval rate` (generación) | **4,89 tok/s** | 23,83 tok/s | 5 veces más lento |
+| Tokens generados | 161 | 346 | |
+| Tiempo total | 34,6 s | 14,9 s | |
+| Modelo en memoria (`ollama ps`) | 1,9 GB, 100 % CPU, contexto 4096 | 1,9 GB, 100 % CPU, contexto 4096 | Igual |
+| RAM disponible con el modelo cargado (`free -h`) | 2,7 GiB (swap usada: 191 MiB) | | |
+
+Conclusiones:
+
+- **Unos 5 tokens/s es lento pero usable**: más o menos la velocidad a la que se lee en voz alta. Para un chat se puede trabajar; para un agente que encadena varias llamadas se notará más.
+- **La diferencia (unas 5 veces) cuadra con el hardware**: 2 núcleos de 2015 con memoria DDR3 frente a 12 núcleos modernos con LPDDR5. La generación en CPU está limitada sobre todo por el ancho de banda de memoria.
+- **¿Por qué `free -h` apenas cambió (2,8 → 2,7 GiB disponibles) si el modelo ocupa 1,9 GB?** Porque llama.cpp abre el fichero GGUF con `mmap`: el kernel proyecta el fichero en memoria y sus páginas se contabilizan como **caché de disco** (`buff/cache`), que Linux considera recuperable y por eso incluye en `available`. La memoria se está usando, pero si otra aplicación la necesita, el kernel puede soltar esas páginas y volver a leerlas del disco después, a costa de que el modelo vaya mucho más lento mientras tanto. Con poca RAM, **`available` no basta para saber si el modelo cabe con holgura**.
+- **El *runner* no aparecía en `ps -C ollama`**: igual que en Windows, el modelo se ejecuta en un proceso aparte con otro nombre. Para localizarlo:
+
+  ```bash
+  ps aux --sort=-rss | head -5
+  ```
+
+### Paso L2: chatbot y medición de eficiencia
+
+Los scripts de Windows eran PowerShell. Para Linux hay una versión equivalente en Python, [`scripts/chat.py`](scripts/chat.py), que solo usa la biblioteca estándar (no hay que instalar nada con `pip`). Hace lo mismo que `chat.ps1`, con dos mejoras pensadas para una máquina lenta:
+
+- **Streaming**: el texto aparece a medida que se genera, en lugar de esperar al final. A 5 tok/s, la diferencia en la sensación de uso es enorme.
+- **Tiempo hasta el primer token**: mide cuánto tarda en empezar a responder, la métrica que más se nota en un chat.
+
+Además de las métricas de Ollama, lee de `/proc` la RAM disponible y la RSS de los procesos de Ollama, y lo guarda todo en `scripts/metricas-linux.csv`.
+
+#### L2.1 Ejecutar el chat
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+python3 scripts/chat.py
+```
+
+Opciones: `--no-think` (sin razonamiento), `--num-ctx 16384` y `--system "..."`. Dentro del chat: `/stats`, `/reset` y `/bye`.
+
+#### L2.2 Batería de pruebas
+
+Las mismas cuatro del paso 2 en Windows, para comparar directamente:
+
+1. `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.`
+2. `Extrae en JSON con las claves nombre, empresa, fecha y importe: "Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz".`
+3. `Dame exactamente 3 ventajas de Kubernetes, cada una en menos de 10 palabras, en lista numerada.`
+4. `¿Cómo me llamo y a qué me dedico?`
+
+Y una quinta con la lección aprendida, con claves y tipos explícitos:
+
+5. `Extrae en JSON con las claves emisor (empresa), cliente (persona), fecha (AAAA-MM-DD) e importe (número con punto decimal): "Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz".`
+
+Después, sal con `/bye`, vuelve a entrar con `python3 scripts/chat.py --no-think` y repite la prueba 5 para comparar tiempos.
+
+#### L2.3 Memoria real del modelo
+
+Con el chat abierto, en otra terminal:
+
+```bash
+ollama ps
+free -h
+ps aux --sort=-rss | head -5
+```
+
+#### Resultado esperado del paso L2
+
+- [ ] Tabla de métricas de las 5 pruebas (prefill, generación y primer token)
+- [ ] Comparación con y sin razonamiento
+- [ ] RSS real del proceso que ejecuta el modelo
 
 ### Pruebas de estrés previstas
 
