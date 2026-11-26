@@ -47,10 +47,11 @@ function Show-Stats {
         $vramMB = [math]::Round($m.size_vram / 1MB)
         Write-Host ("  modelo en memoria: {0} MB (de ellos en GPU: {1} MB), contexto {2}" -f $sizeMB, $vramMB, $m.context_length) -ForegroundColor DarkGray
     }
-    $procs = Get-Process -Name "ollama*" -ErrorAction SilentlyContinue
+    # El modelo puede ejecutarse en un proceso aparte (runner llama.cpp), no solo en "ollama"
+    $procs = Get-Process -Name "ollama*", "llama*" -ErrorAction SilentlyContinue
     if ($procs) {
         $ram = [math]::Round((($procs | Measure-Object WorkingSet64 -Sum).Sum) / 1MB)
-        Write-Host ("  RAM procesos ollama*: {0} MB" -f $ram) -ForegroundColor DarkGray
+        Write-Host ("  RAM procesos ollama*/llama*: {0} MB" -f $ram) -ForegroundColor DarkGray
     }
 }
 

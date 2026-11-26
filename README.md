@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1, paso 1 completado; paso 2 (chatbot y medición) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1, pasos 1 y 2 completados; paso 3 (agente con herramientas) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -13,8 +13,8 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
 3. [Elección del runtime sin permisos de administrador](#elección-del-runtime-sin-permisos-de-administrador)
 4. [Fase 1: Windows sin admin](#fase-1-windows-sin-admin)
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
-   - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia) (en curso)
-   - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use) (pendiente)
+   - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
+   - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use) (en curso)
 5. [Fase 2: Mac (Apple Silicon)](#fase-2-mac-apple-silicon) (pendiente)
 6. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
 7. [Resolución de problemas](#resolución-de-problemas)
@@ -274,16 +274,109 @@ Get-Process ollama* | Select-Object Name, Id, @{n="RAM_MB";e={[math]::Round($_.W
 - `Get-Process` muestra la RAM real de los procesos de Ollama (el servidor y el *runner* que ejecuta el modelo).
 - Prueba también con `-NumCtx 32768` para ver cuánto crece la memoria al ampliar el contexto (la caché KV crece con él).
 
-#### Resultado esperado del paso 2
+#### Resultados del paso 2 (PC Intel i5, 16 GB, 26/11/2026)
 
-- [ ] El script conversa y recuerda el historial
-- [ ] Tabla de métricas de las 4 pruebas (tokens/s de prefill y de generación)
-- [ ] RAM con `num_ctx` 4096 y 32768
-- [ ] Comparación con y sin razonamiento (`-NoThink`)
+Configuración: `scripts/chat.ps1`, `num_ctx` 4096, `temperature` 0.1, razonamiento activado.
+
+| Prueba | Tokens de entrada | Prefill (tok/s) | Tokens de salida | Generación (tok/s) | Tiempo total | Calidad |
+|---|---|---|---|---|---|---|
+| Instrucciones precisas (3 ventajas de Kubernetes) | 162 | 134,59 | 34 | 24,12 | 2,64 s | Correcta: 3 puntos, menos de 10 palabras cada uno |
+| Extracción a JSON (factura) | 258 | 304,49 | 62 | 23,18 | 3,54 s | **Parcial**: JSON válido, pero ver más abajo |
+| Memoria de la conversación | 343 | 995,40 | 23 | 24,22 | 1,32 s | Correcta: recordó nombre y profesión |
+
+Memoria:
+
+| Medida | Valor |
+|---|---|
+| Modelo cargado (`ollama ps` / `/api/ps`) | 1,9 GB (1.835 MB), **100 % CPU**, contexto 4096 |
+| Procesos `ollama` + `ollama app` | 42 MB + 95 MB = 137 MB |
+
+Conclusiones:
+
+- **La velocidad de generación es estable, unos 24 tokens/s**, independientemente de la pregunta. Es lo esperable: en CPU la generación está limitada por el ancho de banda de memoria (cada token nuevo lee todos los pesos, unos 1,8 GB).
+- **El prefill (leer la entrada) es mucho más rápido y crece en cada turno** (134 → 304 → 995 tok/s). No es que el modelo se acelere: Ollama reutiliza la caché KV de los turnos anteriores y solo procesa los tokens nuevos, pero las métricas dividen el total del prompt entre ese tiempo. Por eso en un chat largo la respuesta empieza casi al instante.
+- **La RAM total del sistema dedicada al modelo ronda los 2 GB** con contexto 4096. Los 137 MB de los procesos `ollama*` no incluyen el modelo: en las versiones actuales Ollama lo ejecuta en un proceso *runner* aparte (columna `RUNNER llamacpp`). Para localizarlo: `Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 Name, Id, @{n="RAM_MB";e={[math]::Round($_.WorkingSet64/1MB)}}`. El script ya suma también los procesos `llama*`.
+- **Sin razonamiento (`-NoThink`) las respuestas son más rápidas y más cortas**, porque el modelo se salta la fase de "pensar" antes de responder. Para tareas sencillas compensa; Liquid AI avisa de que puede ser menos consistente en tareas que requieren razonar.
+- **Limitación observada en la extracción:** en `"nombre"` puso el concepto de la factura (`"Factura de Talleres López S.L."`) en lugar de la persona (`"Ana Ruiz"`), e `importe` salió como texto (`"1.250,40 euros"`) en vez de número. La clave `nombre` era ambigua y el modelo eligió mal. Con un modelo de 1,7B conviene **ser explícito**: nombres de clave claros (`cliente`, `emisor`), tipos (`importe` como número con punto decimal) o, mejor aún, pasar un esquema JSON. Ollama admite el parámetro `format` con un JSON Schema para forzar la estructura de salida.
+
+#### Resultado del paso 2
+
+- [x] El script conversa y recuerda el historial
+- [x] Tabla de métricas de las pruebas
+- [x] RAM con `num_ctx` 4096 (la prueba con 32768 queda pendiente, opcional)
+- [x] Comparación con y sin razonamiento (`-NoThink`)
 
 ### Paso 3: arnés agéntico con tool use
 
-Pendiente. Previsto: conectar un arnés agéntico (Hermes Agent, Pi coding agent u otro compatible con la API de Ollama) al modelo local y encargarle una tarea que requiera usar herramientas.
+Objetivo: que el modelo no solo conteste, sino que **actúe**: decida qué herramienta necesita, la pida, reciba el resultado y continúe hasta resolver la tarea. Lo haremos en dos partes:
+
+1. **Mini agente propio en PowerShell** ([`scripts/agente-mini.ps1`](scripts/agente-mini.ps1)), sin instalar nada, para ver por dentro cómo funciona el *tool calling*.
+2. **Un arnés agéntico real** (Pi coding agent) conectado al mismo modelo local.
+
+#### 3.1 Qué es el tool calling
+
+El modelo no ejecuta nada por sí mismo. El flujo es este:
+
+1. El cliente envía la conversación **y la lista de herramientas** disponibles, cada una con su nombre, una descripción y sus parámetros en JSON Schema.
+2. Si el modelo decide que necesita una herramienta, en lugar de texto devuelve una o varias `tool_calls` con el nombre y los argumentos. LFM3 las genera internamente con un formato XML propio y el *parser* `lfm3` de Ollama las convierte al JSON estándar:
+
+   ```json
+   { "role": "assistant", "tool_calls": [ { "function": { "name": "leer_fichero", "arguments": { "ruta": "scripts/chat.ps1" } } } ] }
+   ```
+
+3. El **cliente** (nuestro script o el arnés) ejecuta la herramienta de verdad y añade el resultado al historial con el rol `tool`.
+4. Se vuelve a llamar al modelo, que ya tiene los datos. Se repite hasta que responde con texto normal.
+
+A ese ciclo se le llama **bucle agéntico**. Un arnés como Pi o Hermes es, en esencia, este bucle más un buen conjunto de herramientas, un *system prompt* trabajado y gestión del contexto.
+
+#### 3.2 Mini agente en PowerShell
+
+El script define cuatro herramientas de **solo lectura**, que nunca salen de la carpeta del proyecto:
+
+| Herramienta | Qué hace |
+|---|---|
+| `obtener_fecha_hora` | Fecha, hora y día de la semana del equipo |
+| `info_sistema` | CPU, núcleos, RAM total y libre |
+| `listar_ficheros` | Lista una carpeta del proyecto |
+| `leer_fichero` | Lee un fichero del proyecto (hasta 4000 caracteres) |
+
+Ejecútalo desde la raíz del repositorio:
+
+```powershell
+git pull
+powershell -ExecutionPolicy Bypass -File .\scripts\agente-mini.ps1
+```
+
+Por cada paso verás en magenta qué herramienta pide el modelo, con qué argumentos y qué resultado recibe.
+
+Pruebas propuestas, de menos a más pasos:
+
+1. `¿Qué día de la semana es hoy?` (una herramienta)
+2. `¿Cuánta RAM libre tiene este equipo y qué procesador es?` (una herramienta, interpretar JSON)
+3. `¿Qué ficheros hay en la carpeta scripts?` (una herramienta con argumento)
+4. `Mira qué scripts hay en la carpeta scripts, lee el del chat y explícame en tres frases qué hace.` (encadenar `listar_ficheros` y `leer_fichero`)
+5. `¿Hay algún fichero llamado config.yaml en el proyecto?` (debe comprobarlo, no inventarlo)
+
+Repite la prueba 4 con `-NoThink` y compara pasos, tokens y tiempo.
+
+Qué observar:
+
+- Si elige la herramienta correcta y con los argumentos bien formados.
+- Si encadena varias herramientas cuando hace falta.
+- Si se inventa datos en lugar de usar las herramientas (alucinación).
+
+#### 3.3 Pi coding agent (pendiente)
+
+Pendiente de validar el mini agente. Plan previsto:
+
+- **Por qué Pi primero:** es un arnés mínimo, con un *system prompt* corto y solo cuatro herramientas (`read`, `write`, `edit`, `bash`), lo que encaja con un modelo pequeño en CPU. Ollama lo integra con `ollama launch pi`.
+- **Requisitos sin admin:** Node.js (vale la versión portable en zip, añadida al `PATH` de usuario) y Git for Windows (Pi usa bash para su herramienta de comandos).
+- **Contexto:** subir el contexto por defecto de Ollama con la variable de usuario `OLLAMA_CONTEXT_LENGTH` (por ejemplo 32768), porque 4096 se queda corto para un agente.
+- **Configuración:** `%USERPROFILE%\.pi\agent\models.json` apuntando a `http://localhost:11434/v1` con el modelo `lfm3:1.7b-q8_0`.
+
+#### 3.4 Hermes Agent (opcional, más adelante)
+
+Hermes Agent de Nous Research ya tiene instalador nativo para Windows (`install.ps1`) que se instala en `%LOCALAPPDATA%\hermes` y se integra con `ollama launch hermes`. Es mucho más pesado (descarga Python, Node.js, Chromium, FFmpeg...) y su *system prompt* y herramientas son mucho mayores, lo que en CPU significa más tiempo de prefill en cada turno. Lo probaremos después de Pi para comparar.
 
 ## Fase 2: Mac (Apple Silicon)
 
@@ -310,6 +403,7 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 | `ollama` no se reconoce como comando | PowerShell abierto antes de instalar | Abrir un PowerShell nuevo |
 | `ollama run lfm3` descarga 1,1 GB | Tag por defecto es Q4_K_M | Usar `lfm3:1.7b-q8_0` |
 | Error `tools param requires --jinja flag` | Modelo importado desde `hf.co/...` sin parser | Usar el tag oficial `lfm3:...` de Ollama |
+| Un `.ps1` no se ejecuta por la política de ejecución | Scripts descargados bloqueados | `powershell -ExecutionPolicy Bypass -File .\scripts\<script>.ps1` |
 | Logs del servidor | | `%LOCALAPPDATA%\Ollama` |
 
 ## Referencias
@@ -318,3 +412,7 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 - Ollama para Windows: <https://docs.ollama.com/windows>
 - LFM3 en Ollama, tags y tool calling: <https://www.betterclaw.io/blog/lfm3-ollama-tool-calling-agent-setup>
 - Resumen de LFM3 en Ollama: <https://jdneer.com/blog/liquid-ai-lfm3-local-agent-model-ollama>
+- API de Ollama (chat y tool calling): <https://docs.ollama.com/api>
+- Pi con Ollama: <https://docs.ollama.com/integrations/pi>
+- Hermes con Ollama: <https://docs.ollama.com/integrations/hermes>
+- Instalación de Hermes Agent: <https://hermes-agent.nousresearch.com/docs/getting-started/installation>
