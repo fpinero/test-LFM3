@@ -9,7 +9,7 @@ se genera (en una máquina lenta se agradece) y las métricas llegan en el
 Uso:
     python3 scripts/chat.py
     python3 scripts/chat.py --num-ctx 16384 --no-think
-Comandos dentro del chat: /reset, /stats, /bye
+Comandos dentro del chat: /reset, /stats, /think on|off, /bye
 """
 import argparse
 import csv
@@ -101,7 +101,7 @@ def main():
 
     print(f"{CIAN}Ollama {version} | modelo {a.model} | num_ctx {a.num_ctx} | "
           f"temperature {a.temperature} | think {not a.no_think}{FIN}")
-    print(f"{CIAN}Comandos: /reset (borra historial), /stats (memoria), /bye (salir){FIN}\n")
+    print(f"{CIAN}Comandos: /reset (borra historial), /stats (memoria), /think on|off (razonamiento), /bye (salir){FIN}\n")
 
     messages = [{"role": "system", "content": a.system}]
     turn = 0
@@ -122,6 +122,11 @@ def main():
             continue
         if prompt == "/stats":
             show_stats(a.url, a.model)
+            continue
+        if prompt in ("/think on", "/think off"):
+            # Permite alternar el razonamiento sin perder el historial de la conversación
+            a.no_think = prompt.endswith("off")
+            print(f"Razonamiento {'desactivado' if a.no_think else 'activado'}.\n")
             continue
 
         messages.append({"role": "user", "content": prompt})

@@ -810,7 +810,7 @@ git pull
 python3 scripts/chat.py
 ```
 
-Opciones: `--no-think` (sin razonamiento), `--num-ctx 16384` y `--system "..."`. Dentro del chat: `/stats`, `/reset` y `/bye`.
+Opciones: `--no-think` (sin razonamiento), `--num-ctx 16384` y `--system "..."`. Dentro del chat: `/stats`, `/reset`, `/think on|off` y `/bye`.
 
 #### L2.2 Batería de pruebas
 
@@ -839,9 +839,78 @@ ps aux --sort=-rss | head -5
 
 #### Resultado esperado del paso L2
 
-- [ ] Tabla de métricas de las 5 pruebas (prefill, generación y primer token)
-- [ ] Comparación con y sin razonamiento
-- [ ] RSS real del proceso que ejecuta el modelo
+- [x] Tabla de métricas de las pruebas (prefill, generación y primer token)
+- [x] Comparación con y sin razonamiento
+- [x] RSS real del proceso que ejecuta el modelo
+
+#### Resultados del paso L2 (26/11/2026)
+
+| Prueba | Modo | Tokens entrada | Prefill (tok/s) | Tokens salida | Generación (tok/s) | Primer token | Total | Resultado |
+|---|---|---|---|---|---|---|---|---|
+| 1. Presentación | think | 66 | 21,99 | 145 | 5,12 | 8,27 s (5,26 s de carga) | 36,6 s | Correcta |
+| 2. JSON con clave ambigua `nombre` | think | 164 | 37,59 | 493 | 4,93 | 4,38 s | 104,5 s | **Correcto** (en Windows falló) |
+| 4. Memoria de la conversación | think | 320 | 102,97 | **800** | 4,88 | 3,14 s | **167,0 s** | **Incorrecta**: confundió quién es quién |
+| 5. JSON con claves explícitas | think | 428 | 87,78 | 258 | 5,15 | 4,92 s | 55,0 s | Perfecto |
+| 5. JSON con claves explícitas | **no think** | 119 | 23,20 | **50** | 5,26 | 5,15 s | **14,6 s** | Perfecto |
+
+Memoria con el modelo cargado:
+
+| Medida | Valor |
+|---|---|
+| Proceso que ejecuta el modelo | `/usr/local/lib/ollama/llama-server` (usuario `ollama`), **RSS 1,98 GB**, 98 % de CPU |
+| RAM disponible (`free -h`) | 2,6 GiB, con 304 MiB de swap en uso |
+| Chrome abierto a la vez | ~1,4 GB entre sus procesos |
+
+Conclusiones:
+
+- **La velocidad de generación es constante, unos 5 tok/s**, como en Windows lo era a 24. Lo que cambia el tiempo de respuesta es **cuántos tokens genera**, y ahí manda el razonamiento.
+- **El razonamiento domina el tiempo**: en la prueba 5 la misma respuesta perfecta tardó 55 s con razonamiento (258 tokens) y 14,6 s sin él (50 tokens). A 5 tok/s, cada 100 tokens de "pensar" son 20 segundos de espera.
+- **Más razonamiento no siempre es mejor**: en la prueba de memoria el modelo generó 800 tokens dándole vueltas a "quién es quién", se enredó y acabó respondiendo sobre sí mismo en vez de sobre el usuario. En Windows la misma pregunta salió bien con 23 tokens. Los modelos pequeños pueden "sobrepensar" una pregunta trivial y llegar a una conclusión peor.
+- **La fecha salió correcta en todas las pruebas** (`2026-03-03`). En el razonamiento de la prueba 2 llegó a escribir "formato DD/MM/AAAA", pero la respuesta final usó el formato ISO.
+- **Resultados no deterministas**: la prueba 2 (clave ambigua `nombre`) falló en Windows y acertó aquí. Con temperatura 0.1 sigue habiendo variación, sobre todo cuando la instrucción es ambigua. Es otro argumento para dar instrucciones explícitas.
+- **Ollama ejecuta el modelo con `llama-server`**, el servidor de llama.cpp, como proceso hijo con parámetros como `-c 4096` (contexto), `-np 1` (una petición a la vez) y `--context-shift` (cuando se llena el contexto descarta lo más antiguo en lugar de fallar). Ese proceso es el que ocupa la memoria de verdad (~2 GB).
+- **El modelo cabe en 8 GB, pero sin margen para mucho más**: con Chrome abierto ya se usa algo de swap. Para las pruebas de agentes conviene cerrar el navegador.
+
+#### ¿Razonamiento sí o no? Cómo equilibrarlo
+
+Liquid AI publica LFM3 con el razonamiento activado por defecto y avisa de que desactivarlo "puede ser inconsistente, especialmente en tareas que requieren razonar". Nuestras pruebas matizan esa recomendación:
+
+| Tipo de tarea | Recomendación | Motivo |
+|---|---|---|
+| Extracción de datos con instrucciones explícitas (claves, tipos, formato) | **Sin razonamiento** | El trabajo ya está especificado; razonar solo añade tiempo (55 s frente a 14,6 s con el mismo resultado) |
+| Llamadas a herramientas simples y directas (una herramienta, argumentos obvios) | **Sin razonamiento** | El parser de Ollama valida el formato de la llamada; el modelo solo tiene que elegir |
+| Tareas ambiguas, de varios pasos o con decisiones (qué herramientas encadenar, cómo interpretar algo) | **Con razonamiento** | Es donde el razonamiento aporta: planificar antes de actuar |
+| Preguntas triviales de conversación | **Sin razonamiento**, o reformular | Riesgo de sobrepensar, como en la prueba de memoria |
+
+En la práctica:
+
+- **Elegir por petición, no por sesión.** El parámetro `think` de la API de Ollama se puede cambiar en cada llamada. Un agente o una aplicación pueden decidir según el tipo de tarea. Para experimentar a mano, `chat.py` admite ahora `/think on` y `/think off` sin perder el historial.
+- **En equipos lentos, compensa más precisar la instrucción que dejar pensar al modelo.** La prueba 5 sin razonamiento fue tan buena como con él porque las claves y los tipos estaban claros.
+- **Para tareas críticas, validar en lugar de razonar más.** Comprobar el JSON con un esquema (parámetro `format` de Ollama) o un validador es más barato y fiable que muchos tokens de razonamiento.
+
+### Paso L3: mini agente en Linux
+
+Versión en Python del mini agente de Windows: [`scripts/agente_mini.py`](scripts/agente_mini.py). Mismas cuatro herramientas de solo lectura (`obtener_fecha_hora`, `info_sistema`, `listar_ficheros`, `leer_fichero`), con la información del sistema leída de `/proc`. Igual que `chat.py`, usa streaming para que se vea el razonamiento mientras se genera, y admite `/think on|off`.
+
+Antes de empezar, **cierra Chrome** para liberar memoria. Después:
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+python3 scripts/agente_mini.py
+```
+
+Pruebas (las mismas que en Windows):
+
+1. `¿Qué día de la semana es hoy?`
+2. `¿Cuánta RAM disponible tiene este equipo y qué procesador es?`
+3. `¿Qué ficheros hay en la carpeta scripts?`
+4. `/reset` y después: `Mira qué scripts hay en la carpeta scripts, lee el del chat en Python y explícame en tres frases qué hace.`
+5. `¿Hay algún fichero llamado config.yaml en el proyecto?`
+
+Después, aplica lo aprendido sobre el razonamiento: escribe `/think off`, repite las pruebas 1 a 3 (herramientas simples) y compara tiempos. Luego `/reset`, `/think on` y repite la 4 (varios pasos), que es donde el razonamiento debería aportar.
+
+Qué observar: si elige bien las herramientas, si encadena varias cuando hace falta, el tiempo total de cada prueba y, con `ollama ps` y `free -h` en otra terminal, la memoria (el mini agente usa `num_ctx` 8192).
 
 ### Pruebas de estrés previstas
 
