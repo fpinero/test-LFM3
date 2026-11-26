@@ -1153,6 +1153,29 @@ Liquid AI publica además una variante **QAD Q4_0** (`lfm3:1.7b-qad-q4_0`, 1,0 G
 
    Anota el tiempo de cada tarea para compararlo con la Q8.
 
+#### Resultados del paso L6: Q4_K_M frente a QAD Q4_0 (26/11/2026)
+
+Salida de `python3 scripts/bench.py --models lfm3:1.7b lfm3:1.7b-qad-q4_0 --repeticiones 2` (`num_ctx` 4096):
+
+| Modelo | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | RSS máx. runner (MB) | RAM disponible mín. (MB) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b` (Q4_K_M) | no | 9.59 | 38 | 5.2 | 1211 | 3763 | ok, ok |
+| `lfm3:1.7b` (Q4_K_M) | sí | 9.07 | 412 | 46.1 | 1254 | 3624 | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | no | 10.10 | 52 | 6.6 | 1168 | 3821 | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | sí | 9.57 | 422 | 44.4 | 1216 | 3709 | ok, ok |
+
+Conclusiones:
+
+- **Velocidad y memoria prácticamente iguales**: la QAD Q4_0 genera un 5 % más rápido (10,1 frente a 9,6 tok/s) y ocupa unos 50 MB menos. Q4_0 es un formato más simple que Q4_K_M y algo más barato de calcular en CPU.
+- **Calidad igual en estas pruebas**: JSON exacto en las 8 respuestas. La ventaja teórica de QAD (el modelo se reentrenó para funcionar en 4 bits) no se aprecia en preguntas sueltas; donde debería notarse es en tareas largas, donde los errores se acumulan.
+- **Sin razonamiento la QAD es algo más locuaz** (78 tokens frente a 38 en la presentación), por eso su tiempo medio sale ligeramente mayor pese a generar más rápido.
+- **La variabilidad del razonamiento es enorme**: la misma pregunta JSON con el mismo modelo generó 505 tokens una vez y 1.150 la siguiente (55 s frente a 131 s). Es la razón principal para desactivarlo en tareas bien especificadas: además de lento, **es impredecible**.
+- **La segunda repetición sin razonamiento es más rápida** (por ejemplo 8,3 s → 5,4 s en el JSON) porque Ollama reutiliza la caché del prompt de sistema.
+
+Elección para la prueba con Pi: **QAD Q4_0**, por ser la variante que Liquid AI ha preparado para 4 bits y salir igual o mejor en todo lo medido.
+
+Pendiente: repetir con Pi las tareas 4 y 5 (facturas y validación con `jq`) con `lfm3:1.7b-qad-q4_0`, para comprobar que la calidad agéntica se mantiene en 4 bits.
+
 ### Pruebas de estrés previstas
 
 | Prueba | Qué medimos |
