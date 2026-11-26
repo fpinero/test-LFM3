@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Hermes Agent bloqueado por Defender en el PC corporativo; se probará en la fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1 (Windows) completada. Fase 2 (Linux con 8 GB) en curso; fase 3 (Mac) pendiente.
 
 ## Índice
 
@@ -15,10 +15,11 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
-5. [Fase 2: Mac (Apple Silicon)](#fase-2-mac-apple-silicon) (pendiente)
-6. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
-7. [Resolución de problemas](#resolución-de-problemas)
-8. [Referencias](#referencias)
+5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram) (en curso)
+6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (pendiente)
+7. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
+8. [Resolución de problemas](#resolución-de-problemas)
+9. [Referencias](#referencias)
 
 ## Qué es LFM3 y qué variante usamos
 
@@ -52,13 +53,14 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 ## Entorno de pruebas
 
-| | Fase 1 | Fase 2 |
-|---|---|---|
-| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Mac (Apple Silicon) |
-| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | Por definir |
-| Sistema | Windows | macOS |
-| Permisos | **Sin administrador** | Administrador |
-| Formato del modelo | GGUF Q8_0 | MLX 8 bits |
+| | Fase 1 | Fase 2 | Fase 3 |
+|---|---|---|---|
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Máquina Linux | Mac (Apple Silicon) |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **8 GB** | Por definir |
+| Sistema | Windows | Linux (distribución por confirmar) | macOS |
+| Permisos | **Sin administrador** | Por confirmar | Administrador |
+| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
+| Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
 
 Nota sobre la NPU: ni Ollama ni llama.cpp usan la NPU de Intel; el modelo correrá en la CPU, que es justo para lo que está diseñado LFM3. Aprovechar la NPU requeriría la pila OpenVINO de Intel y una conversión del modelo, algo que queda fuera de esta primera prueba.
 
@@ -530,7 +532,7 @@ La pregunta que queremos responder: **¿un arnés grande aporta algo con un mode
 >
 > **Lección:** en un equipo corporativo, "no necesita admin" no basta. Conviene preferir herramientas que reutilicen runtimes ya instalados y firmados (Node.js, Git, Ollama) frente a las que traen su propia cadena de binarios. Para Hermes las alternativas serían pedir a TI una exclusión de esas reglas para las carpetas de Hermes, o un entorno de desarrollo aprobado (máquina virtual, Dev Box o WSL).
 >
-> **Decisión:** la comparación Pi frente a Hermes con LFM3 se hará en la [fase 2 en el Mac](#fase-2-mac-apple-silicon). Los pasos siguientes quedan documentados como referencia.
+> **Decisión:** la comparación Pi frente a Hermes con LFM3 se hará en la [fase 3 en el Mac](#fase-3-mac-apple-silicon). Los pasos siguientes quedan documentados como referencia.
 
 ##### 3.4.1 Qué instala y dónde
 
@@ -648,7 +650,51 @@ hermes uninstall --full      # elimina también configuración y datos
 
 La documentación recomienda no borrar `%LOCALAPPDATA%\hermes` a mano.
 
-## Fase 2: Mac (Apple Silicon)
+## Fase 2: Linux con 8 GB de RAM
+
+Objetivo: **llevar LFM3 al límite** en una máquina modesta. En el PC Windows sobraba memoria (31 GB), así que ahora comprobamos cómo se comporta con 8 GB: cuánta memoria queda libre, si la velocidad cae, cuánto contexto podemos permitirnos y si un agente sigue siendo usable.
+
+### Paso L0: inventario de la máquina
+
+Antes de instalar nada, conviene saber con qué contamos. En una terminal:
+
+```bash
+cat /etc/os-release | head -4          # distribución y versión
+uname -m                               # arquitectura (x86_64 o aarch64)
+lscpu | grep -E "Model name|^CPU\(s\)|Thread|Flags" | cut -c1-120
+grep -o -w -E "avx2|avx512f|avx_vnni" /proc/cpuinfo | sort -u   # instrucciones vectoriales que acelera llama.cpp
+free -h                                # RAM total, usada y swap
+df -h ~                                # espacio libre en el home
+nproc                                  # núcleos disponibles
+sudo -n true 2>/dev/null && echo "sudo: sí" || echo "sudo: no (o pide contraseña)"
+command -v curl git node zstd          # herramientas ya instaladas
+```
+
+Por qué importa cada dato:
+
+- **RAM y swap:** el modelo Q8 ocupa unos 1,9 GB y el sistema y el escritorio pueden comerse 2 o 3 GB más. Si la memoria se agota, Linux tira de swap (lentísimo) o el OOM killer mata el proceso de Ollama.
+- **AVX2 / AVX-512 / AVX-VNNI:** llama.cpp (el motor de Ollama) usa estas instrucciones para multiplicar matrices. Sin AVX2 la velocidad cae mucho.
+- **Núcleos:** la generación en CPU escala con los núcleos físicos hasta que el cuello de botella pasa a ser el ancho de banda de memoria.
+- **sudo:** decide la forma de instalar Ollama (servicio de sistema o instalación de usuario).
+
+### Paso L1: instalar Ollama y el modelo
+
+Pendiente del inventario. Habrá dos caminos según tengamos `sudo` o no:
+
+- **Con sudo:** el instalador oficial (`curl -fsSL https://ollama.com/install.sh | sh`), que crea un servicio `systemd`.
+- **Sin sudo:** descomprimir el binario en `~/.local` y lanzar `ollama serve` como usuario, igual que en Windows sin admin.
+
+### Pruebas de estrés previstas
+
+| Prueba | Qué medimos |
+|---|---|
+| Línea base Q8 con `num_ctx` 4096 | tokens/s y RAM libre, para comparar con el PC Windows |
+| Q8 frente a Q4_K_M (`lfm3:1.7b`) | cuánto se gana en velocidad y memoria y cuánto se pierde en calidad |
+| Contexto creciente (4K, 32K, 64K, 128K) | crecimiento de la caché KV y punto en el que la máquina empieza a sufrir |
+| Mini agente y Pi | si un agente sigue siendo usable con poca memoria |
+| Peticiones en paralelo (`OLLAMA_NUM_PARALLEL`) | cómo se reparte la máquina entre varios usuarios o agentes |
+
+## Fase 3: Mac (Apple Silicon)
 
 Pendiente. Previsto:
 
