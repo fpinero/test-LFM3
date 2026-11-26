@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Hermes Agent bloqueado por Defender en el PC corporativo; se probará en la fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1 (Windows) y fase 2 (Linux con 8 GB) completadas; fase 3 (Mac) pendiente.
 
 ## Índice
 
@@ -15,10 +15,11 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
-5. [Fase 2: Mac (Apple Silicon)](#fase-2-mac-apple-silicon) (pendiente)
-6. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
-7. [Resolución de problemas](#resolución-de-problemas)
-8. [Referencias](#referencias)
+5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram)
+6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (pendiente)
+7. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
+8. [Resolución de problemas](#resolución-de-problemas)
+9. [Referencias](#referencias)
 
 ## Qué es LFM3 y qué variante usamos
 
@@ -52,13 +53,14 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 ## Entorno de pruebas
 
-| | Fase 1 | Fase 2 |
-|---|---|---|
-| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Mac (Apple Silicon) |
-| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | Por definir |
-| Sistema | Windows | macOS |
-| Permisos | **Sin administrador** | Administrador |
-| Formato del modelo | GGUF Q8_0 | MLX 8 bits |
+| | Fase 1 | Fase 2 | Fase 3 |
+|---|---|---|---|
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | Mac (Apple Silicon) |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | Por definir |
+| Sistema | Windows | Ubuntu 24.04.5 LTS | macOS |
+| Permisos | **Sin administrador** | root / sudo | Administrador |
+| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
+| Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
 
 Nota sobre la NPU: ni Ollama ni llama.cpp usan la NPU de Intel; el modelo correrá en la CPU, que es justo para lo que está diseñado LFM3. Aprovechar la NPU requeriría la pila OpenVINO de Intel y una conversión del modelo, algo que queda fuera de esta primera prueba.
 
@@ -530,7 +532,7 @@ La pregunta que queremos responder: **¿un arnés grande aporta algo con un mode
 >
 > **Lección:** en un equipo corporativo, "no necesita admin" no basta. Conviene preferir herramientas que reutilicen runtimes ya instalados y firmados (Node.js, Git, Ollama) frente a las que traen su propia cadena de binarios. Para Hermes las alternativas serían pedir a TI una exclusión de esas reglas para las carpetas de Hermes, o un entorno de desarrollo aprobado (máquina virtual, Dev Box o WSL).
 >
-> **Decisión:** la comparación Pi frente a Hermes con LFM3 se hará en la [fase 2 en el Mac](#fase-2-mac-apple-silicon). Los pasos siguientes quedan documentados como referencia.
+> **Decisión:** la comparación Pi frente a Hermes con LFM3 se hará en la [fase 3 en el Mac](#fase-3-mac-apple-silicon). Los pasos siguientes quedan documentados como referencia.
 
 ##### 3.4.1 Qué instala y dónde
 
@@ -648,7 +650,560 @@ hermes uninstall --full      # elimina también configuración y datos
 
 La documentación recomienda no borrar `%LOCALAPPDATA%\hermes` a mano.
 
-## Fase 2: Mac (Apple Silicon)
+## Fase 2: Linux con 8 GB de RAM
+
+Objetivo: **llevar LFM3 al límite** en una máquina modesta. En el PC Windows sobraba memoria (31 GB), así que ahora comprobamos cómo se comporta con 8 GB: cuánta memoria queda libre, si la velocidad cae, cuánto contexto podemos permitirnos y si un agente sigue siendo usable.
+
+### Paso L0: inventario de la máquina
+
+Antes de instalar nada, conviene saber con qué contamos. En una terminal:
+
+```bash
+cat /etc/os-release | head -4          # distribución y versión
+uname -m                               # arquitectura (x86_64 o aarch64)
+lscpu | grep -E "Model name|^CPU\(s\)|Thread|Flags" | cut -c1-120
+grep -o -w -E "avx2|avx512f|avx_vnni" /proc/cpuinfo | sort -u   # instrucciones vectoriales que acelera llama.cpp
+free -h                                # RAM total, usada y swap
+df -h ~                                # espacio libre en el home
+nproc                                  # núcleos disponibles
+command -v curl git python3 node      # herramientas ya instaladas
+node -v                                # Pi necesitará Node.js 22.19 o superior
+```
+
+Por qué importa cada dato:
+
+- **RAM y swap:** el modelo Q8 ocupa unos 1,9 GB y el sistema y el escritorio pueden comerse 2 o 3 GB más. Si la memoria se agota, Linux tira de swap (lentísimo) o el OOM killer mata el proceso de Ollama.
+- **AVX2 / AVX-512 / AVX-VNNI:** llama.cpp (el motor de Ollama) usa estas instrucciones para multiplicar matrices. Sin AVX2 la velocidad cae mucho.
+- **Núcleos:** la generación en CPU escala con los núcleos físicos hasta que el cuello de botella pasa a ser el ancho de banda de memoria.
+- **Node.js:** `npm 9.2.0` suele venir con Node.js 18 (el de los repositorios de Debian/Ubuntu), insuficiente para Pi. Lo resolveremos al llegar a ese paso.
+
+#### Resultados del paso L0 (26/11/2026)
+
+| Dato | Valor | Lectura |
+|---|---|---|
+| Sistema | Ubuntu 24.04.5 LTS, x86_64 | Soportado por Ollama sin problemas |
+| CPU | Intel Core i5-5200U a 2,2 GHz (Broadwell, 2015), **2 núcleos y 4 hilos** | Frente a los 12 núcleos del PC Windows: esperamos bastante menos velocidad |
+| Instrucciones | **AVX2** sí; AVX-512 y AVX-VNNI no | Lo mínimo para que llama.cpp vaya razonablemente bien |
+| RAM | 7,7 GiB total, **2,8 GiB disponibles** (4,9 GiB usados con el escritorio y las apps abiertas) | El modelo Q8 (~1,9 GB) cabe, pero muy justo |
+| Swap | 12 GiB, prácticamente sin usar | Red de seguridad, pero si el modelo acaba en swap la velocidad se desploma |
+| Disco | 309 GB libres | Sin problema |
+| Node.js | v18.19.1 (`/usr/bin/node`, paquete de Ubuntu) | Insuficiente para Pi (22.19 o superior); lo actualizaremos en su paso |
+| Python | `python3` de Homebrew (`/home/linuxbrew/...`) | Disponible para los scripts de Linux |
+
+Conclusiones antes de instalar:
+
+- **La memoria es el factor crítico.** Con solo 2,8 GiB disponibles, conviene **cerrar el navegador y las aplicaciones pesadas** antes de las pruebas y anotar `free -h` en cada medición. Si `available` baja de unos 500 MB con el modelo cargado, Linux empezará a usar swap.
+- **Previsión de velocidad:** en CPU, generar cada token obliga a leer todos los pesos (1,8 GB) de memoria. Con 2 núcleos de 2015 y memoria DDR3 esperamos una velocidad de generación **muy inferior a los 24 tok/s** del PC Windows, quizá en el rango de un solo dígito. El paso L1 lo confirmará.
+- Si la Q8 resulta demasiado justa, la alternativa natural es la **Q4_K_M** (`lfm3:1.7b`, 1,1 GB): menos memoria y más velocidad a cambio de algo de precisión. Es justo una de las comparaciones previstas.
+
+### Paso L1: instalar Ollama y el modelo
+
+En este equipo sí tenemos `sudo`, así que usamos el **instalador oficial**, que deja Ollama como un servicio de `systemd` (arranca solo con el sistema y se gestiona con `systemctl`). Es la gran diferencia con Windows, donde Ollama era una app de usuario en la bandeja.
+
+#### L1.1 Instalar Ollama
+
+```bash
+curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+less /tmp/ollama-install.sh        # opcional: revisarlo antes de ejecutarlo (q para salir)
+sh /tmp/ollama-install.sh
+```
+
+El script instala el binario en `/usr/local/bin/ollama`, crea el usuario de sistema `ollama` y el servicio `ollama.service`, y lo arranca.
+
+#### L1.2 Verificar el servicio
+
+```bash
+ollama --version                          # debe ser 0.40.13 o superior
+systemctl status ollama --no-pager        # debe estar "active (running)"
+curl -s http://localhost:11434/api/version
+```
+
+Los logs del servidor, equivalentes a `%LOCALAPPDATA%\Ollama` en Windows, se ven con:
+
+```bash
+journalctl -u ollama -f                   # Ctrl+C para salir
+```
+
+Nota: al ser un servicio, Ollama guarda los modelos en `/usr/share/ollama/.ollama/models` (el home del usuario `ollama`), no en tu home. Las variables de entorno como `OLLAMA_MODELS` u `OLLAMA_CONTEXT_LENGTH` **no se ponen en tu `.bashrc`** (el servicio no lo lee), sino en el propio servicio con `sudo systemctl edit ollama`. Es la versión Linux de la lección de `$env:` en Windows. Lo usaremos más adelante.
+
+#### L1.3 Medir la memoria antes de cargar el modelo
+
+Cierra el navegador y las aplicaciones que no necesites, y después:
+
+```bash
+free -h
+```
+
+Anota la columna `available` de la fila `Mem`: es la RAM de la que dispone realmente el modelo.
+
+#### L1.4 Descargar el modelo Q8 e inspeccionarlo
+
+```bash
+ollama pull lfm3:1.7b-q8_0
+ollama list
+ollama show lfm3:1.7b-q8_0
+```
+
+Igual que en Windows: debe aparecer `Q8_0` y la capacidad `tools`.
+
+#### L1.5 Primera conversación con métricas
+
+```bash
+ollama run lfm3:1.7b-q8_0 --verbose
+```
+
+Usa la misma pregunta que en Windows para poder comparar, por ejemplo: `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.` Anota `prompt eval rate` y `eval rate`. Sin salir del chat, en otra terminal:
+
+```bash
+ollama ps
+free -h
+ps -C ollama -o pid,rss,cmd --sort=-rss | head -5      # RSS en KB de los procesos de Ollama
+```
+
+Sal con `/bye`.
+
+#### Resultado esperado del paso L1
+
+- [x] Servicio `ollama` activo
+- [x] `lfm3:1.7b-q8_0` descargado
+- [x] `eval rate` y `prompt eval rate` de la primera respuesta
+- [x] RAM disponible antes y después de cargar el modelo
+
+#### Resultados del paso L1 (26/11/2026)
+
+Misma presentación que en Windows, con `ollama run --verbose`:
+
+| Métrica | Linux i5-5200U | Windows Core Ultra 5 135U | Relación |
+|---|---|---|---|
+| `prompt eval rate` (prefill) | **17,48 tok/s** | 70,38 tok/s | 4 veces más lento |
+| `eval rate` (generación) | **4,89 tok/s** | 23,83 tok/s | 5 veces más lento |
+| Tokens generados | 161 | 346 | |
+| Tiempo total | 34,6 s | 14,9 s | |
+| Modelo en memoria (`ollama ps`) | 1,9 GB, 100 % CPU, contexto 4096 | 1,9 GB, 100 % CPU, contexto 4096 | Igual |
+| RAM disponible con el modelo cargado (`free -h`) | 2,7 GiB (swap usada: 191 MiB) | | |
+
+Conclusiones:
+
+- **Unos 5 tokens/s es lento pero usable**: más o menos la velocidad a la que se lee en voz alta. Para un chat se puede trabajar; para un agente que encadena varias llamadas se notará más.
+- **La diferencia (unas 5 veces) cuadra con el hardware**: 2 núcleos de 2015 con memoria DDR3 frente a 12 núcleos modernos con LPDDR5. La generación en CPU está limitada sobre todo por el ancho de banda de memoria.
+- **¿Por qué `free -h` apenas cambió (2,8 → 2,7 GiB disponibles) si el modelo ocupa 1,9 GB?** Porque llama.cpp abre el fichero GGUF con `mmap`: el kernel proyecta el fichero en memoria y sus páginas se contabilizan como **caché de disco** (`buff/cache`), que Linux considera recuperable y por eso incluye en `available`. La memoria se está usando, pero si otra aplicación la necesita, el kernel puede soltar esas páginas y volver a leerlas del disco después, a costa de que el modelo vaya mucho más lento mientras tanto. Con poca RAM, **`available` no basta para saber si el modelo cabe con holgura**.
+- **El *runner* no aparecía en `ps -C ollama`**: igual que en Windows, el modelo se ejecuta en un proceso aparte con otro nombre. Para localizarlo:
+
+  ```bash
+  ps aux --sort=-rss | head -5
+  ```
+
+### Paso L2: chatbot y medición de eficiencia
+
+Los scripts de Windows eran PowerShell. Para Linux hay una versión equivalente en Python, [`scripts/chat.py`](scripts/chat.py), que solo usa la biblioteca estándar (no hay que instalar nada con `pip`). Hace lo mismo que `chat.ps1`, con dos mejoras pensadas para una máquina lenta:
+
+- **Streaming**: el texto aparece a medida que se genera, en lugar de esperar al final. A 5 tok/s, la diferencia en la sensación de uso es enorme.
+- **Tiempo hasta el primer token**: mide cuánto tarda en empezar a responder, la métrica que más se nota en un chat.
+
+Además de las métricas de Ollama, lee de `/proc` la RAM disponible y la RSS de los procesos de Ollama, y lo guarda todo en `scripts/metricas-linux.csv`.
+
+#### L2.1 Ejecutar el chat
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+python3 scripts/chat.py
+```
+
+Opciones: `--no-think` (sin razonamiento), `--num-ctx 16384` y `--system "..."`. Dentro del chat: `/stats`, `/reset`, `/think on|off` y `/bye`.
+
+#### L2.2 Batería de pruebas
+
+Las mismas cuatro del paso 2 en Windows, para comparar directamente:
+
+1. `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.`
+2. `Extrae en JSON con las claves nombre, empresa, fecha y importe: "Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz".`
+3. `Dame exactamente 3 ventajas de Kubernetes, cada una en menos de 10 palabras, en lista numerada.`
+4. `¿Cómo me llamo y a qué me dedico?`
+
+Y una quinta con la lección aprendida, con claves y tipos explícitos:
+
+5. `Extrae en JSON con las claves emisor (empresa), cliente (persona), fecha (AAAA-MM-DD) e importe (número con punto decimal): "Factura de Talleres López S.L. emitida el 3 de marzo de 2026 por 1.250,40 euros a nombre de Ana Ruiz".`
+
+Después, sal con `/bye`, vuelve a entrar con `python3 scripts/chat.py --no-think` y repite la prueba 5 para comparar tiempos.
+
+#### L2.3 Memoria real del modelo
+
+Con el chat abierto, en otra terminal:
+
+```bash
+ollama ps
+free -h
+ps aux --sort=-rss | head -5
+```
+
+#### Resultado esperado del paso L2
+
+- [x] Tabla de métricas de las pruebas (prefill, generación y primer token)
+- [x] Comparación con y sin razonamiento
+- [x] RSS real del proceso que ejecuta el modelo
+
+#### Resultados del paso L2 (26/11/2026)
+
+| Prueba | Modo | Tokens entrada | Prefill (tok/s) | Tokens salida | Generación (tok/s) | Primer token | Total | Resultado |
+|---|---|---|---|---|---|---|---|---|
+| 1. Presentación | think | 66 | 21,99 | 145 | 5,12 | 8,27 s (5,26 s de carga) | 36,6 s | Correcta |
+| 2. JSON con clave ambigua `nombre` | think | 164 | 37,59 | 493 | 4,93 | 4,38 s | 104,5 s | **Correcto** (en Windows falló) |
+| 4. Memoria de la conversación | think | 320 | 102,97 | **800** | 4,88 | 3,14 s | **167,0 s** | **Incorrecta**: confundió quién es quién |
+| 5. JSON con claves explícitas | think | 428 | 87,78 | 258 | 5,15 | 4,92 s | 55,0 s | Perfecto |
+| 5. JSON con claves explícitas | **no think** | 119 | 23,20 | **50** | 5,26 | 5,15 s | **14,6 s** | Perfecto |
+
+Memoria con el modelo cargado:
+
+| Medida | Valor |
+|---|---|
+| Proceso que ejecuta el modelo | `/usr/local/lib/ollama/llama-server` (usuario `ollama`), **RSS 1,98 GB**, 98 % de CPU |
+| RAM disponible (`free -h`) | 2,6 GiB, con 304 MiB de swap en uso |
+| Chrome abierto a la vez | ~1,4 GB entre sus procesos |
+
+Conclusiones:
+
+- **La velocidad de generación es constante, unos 5 tok/s**, como en Windows lo era a 24. Lo que cambia el tiempo de respuesta es **cuántos tokens genera**, y ahí manda el razonamiento.
+- **El razonamiento domina el tiempo**: en la prueba 5 la misma respuesta perfecta tardó 55 s con razonamiento (258 tokens) y 14,6 s sin él (50 tokens). A 5 tok/s, cada 100 tokens de "pensar" son 20 segundos de espera.
+- **Más razonamiento no siempre es mejor**: en la prueba de memoria el modelo generó 800 tokens dándole vueltas a "quién es quién", se enredó y acabó respondiendo sobre sí mismo en vez de sobre el usuario. En Windows la misma pregunta salió bien con 23 tokens. Los modelos pequeños pueden "sobrepensar" una pregunta trivial y llegar a una conclusión peor.
+- **La fecha salió correcta en todas las pruebas** (`2026-03-03`). En el razonamiento de la prueba 2 llegó a escribir "formato DD/MM/AAAA", pero la respuesta final usó el formato ISO.
+- **Resultados no deterministas**: la prueba 2 (clave ambigua `nombre`) falló en Windows y acertó aquí. Con temperatura 0.1 sigue habiendo variación, sobre todo cuando la instrucción es ambigua. Es otro argumento para dar instrucciones explícitas.
+- **Ollama ejecuta el modelo con `llama-server`**, el servidor de llama.cpp, como proceso hijo con parámetros como `-c 4096` (contexto), `-np 1` (una petición a la vez) y `--context-shift` (cuando se llena el contexto descarta lo más antiguo en lugar de fallar). Ese proceso es el que ocupa la memoria de verdad (~2 GB).
+- **El modelo cabe en 8 GB, pero sin margen para mucho más**: con Chrome abierto ya se usa algo de swap. Para las pruebas de agentes conviene cerrar el navegador.
+
+#### ¿Razonamiento sí o no? Cómo equilibrarlo
+
+Liquid AI publica LFM3 con el razonamiento activado por defecto y avisa de que desactivarlo "puede ser inconsistente, especialmente en tareas que requieren razonar". Nuestras pruebas matizan esa recomendación:
+
+| Tipo de tarea | Recomendación | Motivo |
+|---|---|---|
+| Extracción de datos con instrucciones explícitas (claves, tipos, formato) | **Sin razonamiento** | El trabajo ya está especificado; razonar solo añade tiempo (55 s frente a 14,6 s con el mismo resultado) |
+| Llamadas a herramientas simples y directas (una herramienta, argumentos obvios) | **Sin razonamiento** | El parser de Ollama valida el formato de la llamada; el modelo solo tiene que elegir |
+| Tareas ambiguas, de varios pasos o con decisiones (qué herramientas encadenar, cómo interpretar algo) | **Con razonamiento** | Es donde el razonamiento aporta: planificar antes de actuar |
+| Preguntas triviales de conversación | **Sin razonamiento**, o reformular | Riesgo de sobrepensar, como en la prueba de memoria |
+
+En la práctica:
+
+- **Elegir por petición, no por sesión.** El parámetro `think` de la API de Ollama se puede cambiar en cada llamada. Un agente o una aplicación pueden decidir según el tipo de tarea. Para experimentar a mano, `chat.py` admite ahora `/think on` y `/think off` sin perder el historial.
+- **En equipos lentos, compensa más precisar la instrucción que dejar pensar al modelo.** La prueba 5 sin razonamiento fue tan buena como con él porque las claves y los tipos estaban claros.
+- **Para tareas críticas, validar en lugar de razonar más.** Comprobar el JSON con un esquema (parámetro `format` de Ollama) o un validador es más barato y fiable que muchos tokens de razonamiento.
+
+### Paso L3: mini agente en Linux
+
+Versión en Python del mini agente de Windows: [`scripts/agente_mini.py`](scripts/agente_mini.py). Mismas cuatro herramientas de solo lectura (`obtener_fecha_hora`, `info_sistema`, `listar_ficheros`, `leer_fichero`), con la información del sistema leída de `/proc`. Igual que `chat.py`, usa streaming para que se vea el razonamiento mientras se genera, y admite `/think on|off`.
+
+Antes de empezar, **cierra Chrome** para liberar memoria. Después:
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+python3 scripts/agente_mini.py
+```
+
+Pruebas (las mismas que en Windows):
+
+1. `¿Qué día de la semana es hoy?`
+2. `¿Cuánta RAM disponible tiene este equipo y qué procesador es?`
+3. `¿Qué ficheros hay en la carpeta scripts?`
+4. `/reset` y después: `Mira qué scripts hay en la carpeta scripts, lee el del chat en Python y explícame en tres frases qué hace.`
+5. `¿Hay algún fichero llamado config.yaml en el proyecto?`
+
+Después, aplica lo aprendido sobre el razonamiento: escribe `/think off`, repite las pruebas 1 a 3 (herramientas simples) y compara tiempos. Luego `/reset`, `/think on` y repite la 4 (varios pasos), que es donde el razonamiento debería aportar.
+
+Qué observar: si elige bien las herramientas, si encadena varias cuando hace falta, el tiempo total de cada prueba y, con `ollama ps` y `free -h` en otra terminal, la memoria (el mini agente usa `num_ctx` 8192).
+
+#### Resultados del paso L3 (26/11/2026)
+
+Todas con razonamiento activado:
+
+| Prueba | Herramientas usadas | Pasos | Tokens generados | Tiempo | Resultado |
+|---|---|---|---|---|---|
+| 1. Día de la semana | `obtener_fecha_hora` | 2 | 138 | 47,9 s | Correcto (jueves) |
+| 2. RAM disponible y procesador | `info_sistema` | 2 | 218 | 69,6 s | Correcto (2,7 GB, i5-5200U) |
+| 3. Ficheros de `scripts` | `listar_ficheros("scripts")` | 2 | 176 | 39,4 s | Correcto |
+| 4. Listar, leer `chat.py` y resumir (tras `/reset`) | `listar_ficheros` + `leer_fichero` | 3 | 863 | **254,2 s** | Correcto y preciso |
+
+Memoria durante las pruebas (con Chrome cerrado):
+
+| Medida | Valor |
+|---|---|
+| Modelo cargado (`ollama ps`) | 2,0 GB, 100 % CPU, contexto **8192** (frente a 1,9 GB con 4096) |
+| RAM disponible (`free -h`) | **4,5 GiB** (frente a 2,6 GiB con Chrome abierto) |
+
+Conclusiones:
+
+- **El tool calling es igual de fiable que en Windows**: herramienta correcta en todos los casos, argumentos bien formados y, en la prueba 4, el encadenamiento completo `listar_ficheros` → identificar `chat.py` entre cinco ficheros → `leer_fichero("scripts/chat.py")` → resumen correcto en tres frases.
+- **Razona de forma más directa que en el chat**: con herramientas, cada paso tiene un objetivo concreto ("llamar a X", "responder con el resultado") y el razonamiento es corto (138 a 218 tokens en las preguntas simples). La deriva del paso L2 apareció en una pregunta abierta, sin herramientas que acotasen la tarea.
+- **El tiempo por pregunta es alto**: unos 40 a 70 s en las preguntas de una sola herramienta y más de 4 minutos en la de varios pasos. Cada paso del bucle es una llamada completa al modelo (prefill del historial, que crece con cada resultado de herramienta, más el razonamiento a ~5 tok/s). En la prueba 4, leer `chat.py` metió unos 4.000 caracteres en el contexto, que el modelo tuvo que procesar antes de responder.
+- **Subir el contexto de 4K a 8K solo añadió ~100 MB**: gracias a que LFM3 tiene solo 6 capas de atención, la caché KV es pequeña. Esto es lo que permite pensar en 32K para Pi incluso con 8 GB.
+- **Cerrar Chrome liberó casi 2 GiB**: en una máquina de 8 GB, el navegador compite directamente con el modelo.
+
+Pendiente de esta batería (opcional): repetir las preguntas 1 a 3 con `/think off` para medir cuánto se ahorra en las llamadas simples, y la prueba de `config.yaml`.
+
+### Paso L4: Pi coding agent en Linux
+
+Mismo arnés que en Windows, ahora en una máquina con una cuarta parte de la potencia. Aquí Pi usa el bash nativo de Linux, sin necesidad de Git Bash.
+
+#### L4.1 Actualizar Node.js
+
+Pi necesita **Node.js 22.19 o superior** y el equipo tiene la versión 18.19.1 del paquete de Ubuntu. En lugar de tocar el Node del sistema, aprovechamos que ya está instalado **Homebrew para Linux** (el `python3` viene de ahí) e instalamos un Node moderno en paralelo:
+
+```bash
+brew install node
+hash -r                 # que bash olvide la ruta antigua de node
+which node              # debe apuntar a /home/linuxbrew/.linuxbrew/bin/node
+node -v                 # 22.19 o superior
+npm -v
+```
+
+Como Homebrew está antes que `/usr/bin` en el `PATH`, su `node` tiene prioridad y el paquete de Ubuntu queda intacto. Si `which node` siguiera mostrando `/usr/bin/node`, abre una terminal nueva.
+
+Alternativa sin Homebrew: [nvm](https://github.com/nvm-sh/nvm), que instala versiones de Node en el home del usuario (`nvm install 24`).
+
+#### L4.2 Configurar el servicio de Ollama: contexto y permanencia en memoria
+
+Igual que en Windows hay que subir el contexto, pero en Linux **las variables se configuran en el servicio de systemd**, no en `.bashrc`:
+
+```bash
+sudo systemctl edit ollama
+```
+
+Se abre un editor con un fichero de *override*. Añade en la zona indicada:
+
+```ini
+[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=32768"
+Environment="OLLAMA_KEEP_ALIVE=30m"
+```
+
+Guarda, sal y aplica:
+
+```bash
+sudo systemctl restart ollama
+systemctl show ollama --property=Environment     # comprobar que las ve
+```
+
+- `OLLAMA_CONTEXT_LENGTH=32768`: contexto por defecto para peticiones que no fijan `num_ctx`, como las de Pi a través de la API compatible con OpenAI.
+- `OLLAMA_KEEP_ALIVE=30m`: mantiene el modelo cargado 30 minutos sin uso (por defecto son 5). En el paso L3, `ollama ps` mostraba que se iba a descargar en segundos; recargarlo cuesta unos 5 s y, sobre todo, **se pierde la caché del prompt**, que en esta máquina es oro.
+
+El fichero de override queda en `/etc/systemd/system/ollama.service.d/override.conf` y sobrevive a las actualizaciones de Ollama.
+
+#### L4.3 Instalar y lanzar Pi con LFM3
+
+Con Chrome cerrado:
+
+```bash
+mkdir -p ~/pi-sandbox && cd ~/pi-sandbox
+ollama launch pi --model lfm3:1.7b-q8_0
+```
+
+Si `npm install -g` fallase por permisos (el prefijo global apunta a una carpeta del sistema), con el Node de Homebrew no debería ocurrir, porque su prefijo está en `/home/linuxbrew`.
+
+Aplica desde el principio la lección de Windows: edita `~/.pi/agent/models.json` para que Pi conozca el contexto real y reabre Pi:
+
+```json
+"models": [{ "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 }]
+```
+
+**Aviso de rendimiento:** el primer turno de Pi tendrá que procesar su *system prompt* y la definición de herramientas (unos miles de tokens) a ~20-100 tok/s, así que puede tardar un minuto o más en empezar a responder. A partir del segundo turno la caché del prompt hace el trabajo (en Windows el acierto de caché fue del 96 %).
+
+#### L4.4 Tareas
+
+Las mismas cinco del apartado 3.3.4 de Windows, en `~/pi-sandbox`:
+
+1. `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. La extracción de facturas a `facturas.json` (mismo texto que en Windows).
+5. `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Anota el tiempo de cada tarea y, en otra terminal, `ollama ps` y `free -h` para ver la memoria con 32K de contexto. La barra de estado de Pi muestra los tokens enviados y recibidos y el porcentaje de acierto de caché.
+
+#### Resultados del paso L4 (26/11/2026)
+
+Pi v1.6.1 con Node.js v26.13.1 (Homebrew) y el servicio de Ollama configurado con `OLLAMA_CONTEXT_LENGTH=32768` y `OLLAMA_KEEP_ALIVE=30m`. **Las cinco tareas se completaron correctamente**, aunque lentas:
+
+| Tarea | Herramientas de Pi | Resultado |
+|---|---|---|
+| 1. Versiones de node y git | `bash`: `node --version`, `git --version` | Correcto (v26.13.1 y 2.43.0), presentado en tabla |
+| 2. Crear `notas.md` | `write` y después `read` para verificar | Correcto |
+| 3. Añadir una cuarta ventaja | `read`, `edit` (sustitución del último punto por él mismo más el nuevo) y `read` | Correcto, edición precisa sin reescribir el fichero |
+| 4. Facturas a JSON | `write` de `facturas.txt`, `write` de `facturas.json` y `read` | **Perfecto**: emisores, clientes, fechas ISO e importes numéricos |
+| 5. Validar y sumar | `bash`: `jq empty` y `jq '[.[].importe] \| add'` | Correcto: 1.772,30 €; detectó y explicó el artefacto de coma flotante (`1772.3000000000002`) |
+
+Datos de la barra de estado de Pi al final: 4,7K tokens enviados, 3,0K generados, **99,4 % de acierto de caché**. Nivel de razonamiento de Pi: `medium`.
+
+Memoria al terminar:
+
+| Medida | Valor |
+|---|---|
+| Modelo cargado (`ollama ps`) | 2,1 GB, 100 % CPU, contexto **32768**, se mantiene 30 minutos |
+| RAM disponible (`free -h`) | 2,4 GiB, con 723 MiB de swap en uso |
+
+Conclusiones:
+
+- **Misma calidad que en Windows con una cuarta parte de la máquina**: LFM3 resolvió todas las tareas agénticas sin un solo error de formato en las llamadas a herramientas. La capacidad del modelo no depende del hardware; solo la velocidad.
+- **Comportamiento muy "agéntico"**: verifica su trabajo releyendo los ficheros, usa `edit` en lugar de reescribir, elige `jq` (que estaba instalado) para validar y sumar, y explica el error de redondeo en lugar de mostrarlo sin más.
+- **Pasar de 8K a 32K de contexto solo añadió ~100 MB** (2,0 → 2,1 GB). Con LFM3, en 8 GB caben contextos grandes sin problema; lo que no sobra es la velocidad.
+- **La lentitud viene del razonamiento**: en los razonamientos visibles se ve al modelo "pensando" en inglés antes de cada acción (por ejemplo, decidiendo cómo convertir `1.250,40`). A unos 5 tok/s, cada párrafo de razonamiento son varios segundos de espera.
+- **La caché hace viable el uso**: con un 94-99 % de acierto, solo se procesan los tokens nuevos de cada turno. Sin `OLLAMA_KEEP_ALIVE` el modelo se habría descargado entre tareas y cada una habría empezado de cero.
+- **Pendiente:** la barra de Pi seguía mostrando `.../262k`, así que falta añadir `"contextWindow": 32768` en `~/.pi/agent/models.json` (ver el ajuste recomendado del apartado 3.3).
+
+### Paso L5: Q8 frente a Q4_K_M, ¿cuánto se gana?
+
+En CPU, generar cada token obliga a leer todos los pesos de memoria. La Q4_K_M ocupa 1,1 GB frente a 1,8 GB de la Q8_0, así que en teoría debería generar en torno a un 50-60 % más rápido, a cambio de algo de precisión. Es justo lo que hay que medir en una máquina donde la velocidad es el problema.
+
+Para no tener que copiar métricas a mano, hay un banco de pruebas reproducible, [`scripts/bench.py`](scripts/bench.py):
+
+- Lanza las mismas tres preguntas (presentación, JSON con claves explícitas y las 3 ventajas de Kubernetes) a cada modelo, con y sin razonamiento.
+- Comprueba automáticamente si el JSON extraído es exactamente el esperado.
+- Mide la velocidad, los tokens, el tiempo, la RSS del `llama-server` y la RAM disponible.
+- Descarga cada modelo antes de cargar el siguiente, para que no convivan dos en 8 GB.
+- Al final imprime una tabla en Markdown lista para pegar en este README.
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+ollama pull lfm3:1.7b            # Q4_K_M, 1,1 GB
+python3 scripts/bench.py         # compara lfm3:1.7b-q8_0 y lfm3:1.7b
+```
+
+Tarda varios minutos (12 respuestas por modelo; las de razonamiento son las lentas). Con `--repeticiones 2` los promedios son más fiables, a costa del doble de tiempo.
+
+Si la Q4 sale bien parada, el remate es repetir alguna tarea de Pi con ella:
+
+```bash
+cd ~/pi-sandbox
+pi --model ollama/lfm3:1.7b
+```
+
+(Antes hay que añadir `{ "id": "lfm3:1.7b", "contextWindow": 32768 }` a la lista de modelos de `~/.pi/agent/models.json`.)
+
+#### Resultados del paso L5 (26/11/2026)
+
+Salida de `python3 scripts/bench.py` (`num_ctx` 4096, 1 repetición):
+
+| Modelo | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | RSS máx. runner (MB) | RAM disponible mín. (MB) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b-q8_0` | no | 5.78 | 45 | 11.4 | 1922 | 2922 | ok |
+| `lfm3:1.7b-q8_0` | sí | 5.70 | 482 | 85.1 | 1944 | 2986 | ok |
+| `lfm3:1.7b` (Q4_K_M) | no | 9.63 | 38 | 6.3 | 1211 | 3889 | ok |
+| `lfm3:1.7b` (Q4_K_M) | sí | 9.28 | 266 | 29.2 | 1228 | 3756 | ok |
+
+Detalle por prueba:
+
+| Prueba | Q8 sin razonar | Q8 razonando | Q4 sin razonar | Q4 razonando |
+|---|---|---|---|---|
+| Presentación | 60 tok, 12,5 s | 164 tok, 29,3 s | 38 tok, 5,7 s | 140 tok, 15,1 s |
+| JSON (claves explícitas) | 49 tok, 13,7 s, ok | 823 tok, 146,4 s, ok | 49 tok, 8,3 s, ok | 464 tok, 51,7 s, ok |
+| 3 ventajas de Kubernetes | 27 tok, 8,0 s | 459 tok, 79,7 s | 27 tok, 4,8 s | 193 tok, 20,7 s |
+| Carga del modelo | 6,2 s | | 3,8 s | |
+
+Conclusiones:
+
+- **La Q4_K_M genera un 67 % más rápido** (9,6 frente a 5,8 tok/s), muy cerca de lo que predice la teoría: lee 1,1 GB por token en lugar de 1,8 GB. En CPU, **la velocidad de generación es inversamente proporcional al tamaño del modelo en memoria**.
+- **Ahorra unos 700 MB de RAM** (RSS de 1,2 GB frente a 1,9 GB) y carga en 3,8 s frente a 6,2 s. En una máquina de 8 GB eso es casi 1 GB más de margen para el sistema y el navegador.
+- **Sin pérdida de calidad apreciable en estas pruebas**: el JSON salió exacto en los cuatro casos.
+- **Combinando Q4 y sin razonamiento, la respuesta media baja de 85 s a 6 s** respecto a Q8 razonando. Son dos palancas independientes: la cuantización acelera cada token y el modo sin razonamiento reduce cuántos tokens se generan.
+- **El número de tokens de razonamiento varía mucho** (823 frente a 464 en el mismo JSON). Con una sola repetición no se puede afirmar que la Q4 razone "menos"; es la variabilidad propia del razonamiento. Para afinar, `--repeticiones 3`.
+- **Matiz importante**: estas pruebas son de una sola respuesta. La Q8 se recomendó en la charla por su fiabilidad en tareas agénticas largas, donde los pequeños errores de una cuantización más agresiva se acumulan paso a paso. Falta comprobar la Q4 con Pi.
+
+### Conclusiones de la fase Linux (8 GB)
+
+| | Windows, Core Ultra 5 135U, 31 GB | Linux, i5-5200U, 8 GB, Q8 | Linux, i5-5200U, 8 GB, Q4_K_M |
+|---|---|---|---|
+| Generación | ~24 tok/s | ~5,8 tok/s | ~9,6 tok/s |
+| Memoria del modelo (contexto 4K) | 1,9 GB | 1,9 GB | 1,2 GB |
+| Chat sencillo | Instantáneo | Usable, con paciencia | Fluido sin razonamiento |
+| Mini agente (una herramienta) | 10-16 s | 40-70 s | No medido |
+| Pi (5 tareas) | Rápido, todo correcto | Lento, todo correcto | Facturas con QAD Q4_0: bastante más rápido y correcto |
+
+**¿Es viable LFM3 en un portátil de 2015 con 8 GB?** Sí, con matices:
+
+1. **Cabe con holgura**: incluso con 32K de contexto el modelo Q8 no pasa de 2,1 GB, gracias a sus pocas capas de atención. El factor limitante no es la memoria sino la velocidad de la CPU y de la RAM.
+2. **La calidad no depende del hardware**: todas las tareas agénticas salieron igual de bien que en el equipo potente.
+3. **Para que sea cómodo hay que usar las dos palancas**: la cuantización Q4 (un 67 % más rápida) y desactivar el razonamiento en las tareas sencillas o bien especificadas.
+4. **La configuración del servicio importa**: `OLLAMA_KEEP_ALIVE` para conservar la caché del prompt entre peticiones (con un 94-99 % de acierto en Pi) y cerrar el navegador para no entrar en swap.
+
+**Configuración recomendada para un equipo de 8 GB con CPU modesta:**
+
+| Ajuste | Valor | Por qué |
+|---|---|---|
+| Modelo | `lfm3:1.7b-qad-q4_0` | ~10 tok/s frente a ~5,8 de la Q8, 1,1 GB en memoria y calidad agéntica validada |
+| Razonamiento | Desactivado en tareas bien especificadas; activado en tareas ambiguas o de varios pasos | El razonamiento multiplica el tiempo y es muy variable (de 505 a 1.150 tokens en la misma pregunta) |
+| `OLLAMA_KEEP_ALIVE` | `30m` o más | Conserva el modelo y la caché del prompt entre peticiones |
+| `OLLAMA_CONTEXT_LENGTH` | `32768` para agentes | Solo cuesta ~100 MB más que 8K gracias a las 6 capas de atención |
+| Entorno | Cerrar el navegador | Libera hasta 2 GiB y evita entrar en swap |
+
+### Paso L6: validar la cuantización de 4 bits en tareas agénticas
+
+Liquid AI publica además una variante **QAD Q4_0** (`lfm3:1.7b-qad-q4_0`, 1,0 GB). QAD (*quantization-aware distillation*) significa que el modelo se ha reentrenado para funcionar bien en 4 bits, en lugar de cuantizarse después sin más, así que en principio debería conservar mejor la calidad que la Q4_K_M. Es la candidata natural para esta máquina.
+
+1. Comparar las dos variantes de 4 bits (y de paso repetir para tener promedios):
+
+   ```bash
+   ollama pull lfm3:1.7b-qad-q4_0
+   python3 scripts/bench.py --models lfm3:1.7b lfm3:1.7b-qad-q4_0 --repeticiones 2
+   ```
+
+2. Repetir con Pi las tareas 4 y 5 (facturas y validación con `jq`) usando la mejor de las dos. Antes, añade los modelos de 4 bits a `~/.pi/agent/models.json` con su `contextWindow`:
+
+   ```json
+   "models": [
+     { "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 },
+     { "id": "lfm3:1.7b", "contextWindow": 32768 },
+     { "id": "lfm3:1.7b-qad-q4_0", "contextWindow": 32768 }
+   ]
+   ```
+
+   ```bash
+   cd ~/pi-sandbox && rm -f facturas.txt facturas.json
+   pi --model ollama/lfm3:1.7b-qad-q4_0
+   ```
+
+   Anota el tiempo de cada tarea para compararlo con la Q8.
+
+#### Resultados del paso L6: Q4_K_M frente a QAD Q4_0 (26/11/2026)
+
+Salida de `python3 scripts/bench.py --models lfm3:1.7b lfm3:1.7b-qad-q4_0 --repeticiones 2` (`num_ctx` 4096):
+
+| Modelo | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | RSS máx. runner (MB) | RAM disponible mín. (MB) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b` (Q4_K_M) | no | 9.59 | 38 | 5.2 | 1211 | 3763 | ok, ok |
+| `lfm3:1.7b` (Q4_K_M) | sí | 9.07 | 412 | 46.1 | 1254 | 3624 | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | no | 10.10 | 52 | 6.6 | 1168 | 3821 | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | sí | 9.57 | 422 | 44.4 | 1216 | 3709 | ok, ok |
+
+Conclusiones:
+
+- **Velocidad y memoria prácticamente iguales**: la QAD Q4_0 genera un 5 % más rápido (10,1 frente a 9,6 tok/s) y ocupa unos 50 MB menos. Q4_0 es un formato más simple que Q4_K_M y algo más barato de calcular en CPU.
+- **Calidad igual en estas pruebas**: JSON exacto en las 8 respuestas. La ventaja teórica de QAD (el modelo se reentrenó para funcionar en 4 bits) no se aprecia en preguntas sueltas; donde debería notarse es en tareas largas, donde los errores se acumulan.
+- **Sin razonamiento la QAD es algo más locuaz** (78 tokens frente a 38 en la presentación), por eso su tiempo medio sale ligeramente mayor pese a generar más rápido.
+- **La variabilidad del razonamiento es enorme**: la misma pregunta JSON con el mismo modelo generó 505 tokens una vez y 1.150 la siguiente (55 s frente a 131 s). Es la razón principal para desactivarlo en tareas bien especificadas: además de lento, **es impredecible**.
+- **La segunda repetición sin razonamiento es más rápida** (por ejemplo 8,3 s → 5,4 s en el JSON) porque Ollama reutiliza la caché del prompt de sistema.
+
+Elección para la prueba con Pi: **QAD Q4_0**, por ser la variante que Liquid AI ha preparado para 4 bits y salir igual o mejor en todo lo medido.
+
+#### Resultado con Pi y QAD Q4_0 (26/11/2026)
+
+Se borraron los ficheros de la prueba anterior (`rm facturas.*`) y se repitió con `pi --model ollama/lfm3:1.7b-qad-q4_0` la tarea de facturas (crear `facturas.txt`, leerlo y generar `facturas.json` con claves y tipos explícitos):
+
+- **Resultado correcto**, igual que con la Q8.
+- **Bastante más rápido** que con la Q8, en la línea del 67-75 % de velocidad extra medido con el banco de pruebas.
+
+Con esto la cuantización de 4 bits queda validada también en una tarea agéntica de varios pasos (escribir, leer, transformar y escribir), que era la duda que quedaba abierta.
+
+### Estado de las pruebas de estrés
+
+| Prueba | Estado |
+|---|---|
+| Línea base Q8 con `num_ctx` 4096 | Hecha (pasos L1 y L2) |
+| Q8 frente a Q4_K_M y QAD Q4_0 | Hecha (pasos L5 y L6) |
+| Contexto creciente | Parcial: 4K, 8K y 32K medidos (1,9, 2,0 y 2,1 GB). Quedan 64K y 128K (opcional) |
+| Mini agente y Pi | Hecha (pasos L3, L4 y L6) |
+| Peticiones en paralelo (`OLLAMA_NUM_PARALLEL`) | Pendiente (opcional) |
+
+## Fase 3: Mac (Apple Silicon)
 
 Pendiente. Previsto:
 
@@ -681,6 +1236,8 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 | `ii: command not found` dentro de Pi | Pi ejecuta comandos con Git Bash, no con PowerShell | Usar sintaxis bash, por ejemplo `explorer.exe .` |
 | Pi muestra `.../262k` de contexto | Pi lee el máximo nativo del modelo, no el de Ollama | Añadir `contextWindow: 32768` en `models.json` |
 | Defender bloquea `python.exe` o `whoami.exe`/`tar.exe` al instalar Hermes | Reglas ASR de prevalencia y de herramientas del sistema suplantadas | Pedir exclusión a TI, usar VM/Dev Box/WSL o probarlo en otro equipo |
+| Una variable de Ollama no tiene efecto en Linux | El servicio systemd no lee `.bashrc` ni el entorno de la terminal | `sudo systemctl edit ollama` con `Environment=...` y `sudo systemctl restart ollama` |
+| `node -v` sigue mostrando 18 tras `brew install node` | bash recuerda la ruta antigua | `hash -r` o abrir una terminal nueva |
 | Logs del servidor | | `%LOCALAPPDATA%\Ollama` |
 
 ## Referencias
