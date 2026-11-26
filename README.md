@@ -1019,6 +1019,66 @@ Las mismas cinco del apartado 3.3.4 de Windows, en `~/pi-sandbox`:
 
 Anota el tiempo de cada tarea y, en otra terminal, `ollama ps` y `free -h` para ver la memoria con 32K de contexto. La barra de estado de Pi muestra los tokens enviados y recibidos y el porcentaje de acierto de caché.
 
+#### Resultados del paso L4 (26/11/2026)
+
+Pi v1.6.1 con Node.js v26.13.1 (Homebrew) y el servicio de Ollama configurado con `OLLAMA_CONTEXT_LENGTH=32768` y `OLLAMA_KEEP_ALIVE=30m`. **Las cinco tareas se completaron correctamente**, aunque lentas:
+
+| Tarea | Herramientas de Pi | Resultado |
+|---|---|---|
+| 1. Versiones de node y git | `bash`: `node --version`, `git --version` | Correcto (v26.13.1 y 2.43.0), presentado en tabla |
+| 2. Crear `notas.md` | `write` y después `read` para verificar | Correcto |
+| 3. Añadir una cuarta ventaja | `read`, `edit` (sustitución del último punto por él mismo más el nuevo) y `read` | Correcto, edición precisa sin reescribir el fichero |
+| 4. Facturas a JSON | `write` de `facturas.txt`, `write` de `facturas.json` y `read` | **Perfecto**: emisores, clientes, fechas ISO e importes numéricos |
+| 5. Validar y sumar | `bash`: `jq empty` y `jq '[.[].importe] \| add'` | Correcto: 1.772,30 €; detectó y explicó el artefacto de coma flotante (`1772.3000000000002`) |
+
+Datos de la barra de estado de Pi al final: 4,7K tokens enviados, 3,0K generados, **99,4 % de acierto de caché**. Nivel de razonamiento de Pi: `medium`.
+
+Memoria al terminar:
+
+| Medida | Valor |
+|---|---|
+| Modelo cargado (`ollama ps`) | 2,1 GB, 100 % CPU, contexto **32768**, se mantiene 30 minutos |
+| RAM disponible (`free -h`) | 2,4 GiB, con 723 MiB de swap en uso |
+
+Conclusiones:
+
+- **Misma calidad que en Windows con una cuarta parte de la máquina**: LFM3 resolvió todas las tareas agénticas sin un solo error de formato en las llamadas a herramientas. La capacidad del modelo no depende del hardware; solo la velocidad.
+- **Comportamiento muy "agéntico"**: verifica su trabajo releyendo los ficheros, usa `edit` en lugar de reescribir, elige `jq` (que estaba instalado) para validar y sumar, y explica el error de redondeo en lugar de mostrarlo sin más.
+- **Pasar de 8K a 32K de contexto solo añadió ~100 MB** (2,0 → 2,1 GB). Con LFM3, en 8 GB caben contextos grandes sin problema; lo que no sobra es la velocidad.
+- **La lentitud viene del razonamiento**: en los razonamientos visibles se ve al modelo "pensando" en inglés antes de cada acción (por ejemplo, decidiendo cómo convertir `1.250,40`). A unos 5 tok/s, cada párrafo de razonamiento son varios segundos de espera.
+- **La caché hace viable el uso**: con un 94-99 % de acierto, solo se procesan los tokens nuevos de cada turno. Sin `OLLAMA_KEEP_ALIVE` el modelo se habría descargado entre tareas y cada una habría empezado de cero.
+- **Pendiente:** la barra de Pi seguía mostrando `.../262k`, así que falta añadir `"contextWindow": 32768` en `~/.pi/agent/models.json` (ver el ajuste recomendado del apartado 3.3).
+
+### Paso L5: Q8 frente a Q4_K_M, ¿cuánto se gana?
+
+En CPU, generar cada token obliga a leer todos los pesos de memoria. La Q4_K_M ocupa 1,1 GB frente a 1,8 GB de la Q8_0, así que en teoría debería generar en torno a un 50-60 % más rápido, a cambio de algo de precisión. Es justo lo que hay que medir en una máquina donde la velocidad es el problema.
+
+Para no tener que copiar métricas a mano, hay un banco de pruebas reproducible, [`scripts/bench.py`](scripts/bench.py):
+
+- Lanza las mismas tres preguntas (presentación, JSON con claves explícitas y las 3 ventajas de Kubernetes) a cada modelo, con y sin razonamiento.
+- Comprueba automáticamente si el JSON extraído es exactamente el esperado.
+- Mide la velocidad, los tokens, el tiempo, la RSS del `llama-server` y la RAM disponible.
+- Descarga cada modelo antes de cargar el siguiente, para que no convivan dos en 8 GB.
+- Al final imprime una tabla en Markdown lista para pegar en este README.
+
+```bash
+cd ~/my_repos/test-LFM3
+git pull
+ollama pull lfm3:1.7b            # Q4_K_M, 1,1 GB
+python3 scripts/bench.py         # compara lfm3:1.7b-q8_0 y lfm3:1.7b
+```
+
+Tarda varios minutos (12 respuestas por modelo; las de razonamiento son las lentas). Con `--repeticiones 2` los promedios son más fiables, a costa del doble de tiempo.
+
+Si la Q4 sale bien parada, el remate es repetir alguna tarea de Pi con ella:
+
+```bash
+cd ~/pi-sandbox
+pi --model ollama/lfm3:1.7b
+```
+
+(Antes hay que añadir `{ "id": "lfm3:1.7b", "contextWindow": 32768 }` a la lista de modelos de `~/.pi/agent/models.json`.)
+
 ### Pruebas de estrés previstas
 
 | Prueba | Qué medimos |
