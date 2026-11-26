@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1, pasos 1, 2 y 3.2 completados; paso 3.3 (Pi) en curso. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Pendiente: Hermes (opcional) y fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -14,7 +14,7 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
 4. [Fase 1: Windows sin admin](#fase-1-windows-sin-admin)
    - [Paso 1: instalar Ollama por usuario y descargar LFM3 Q8](#paso-1-instalar-ollama-por-usuario-y-descargar-lfm3-q8)
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
-   - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use) (en curso)
+   - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
 5. [Fase 2: Mac (Apple Silicon)](#fase-2-mac-apple-silicon) (pendiente)
 6. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
 7. [Resolución de problemas](#resolución-de-problemas)
@@ -484,6 +484,37 @@ Para medir una tarea de forma aislada se puede usar el modo no interactivo de Pi
 Measure-Command { pi --model ollama/lfm3:1.7b-q8_0 -p "Crea hola.txt con el texto Hola desde LFM3" | Out-Host }
 ```
 
+##### Resultados del paso 3.3 (26/11/2026)
+
+Pi se instaló con `ollama launch pi` sin permisos de administrador y completó las tareas propuestas **bien y rápido**, por encima de lo esperado para un modelo de 1,7B.
+
+Resultado de la tarea 4 (extracción de facturas), `facturas.json` generado por el agente:
+
+```json
+[
+  { "emisor": "Talleres López S.L.", "cliente": "Ana Ruiz",    "fecha": "2026-03-03", "importe": 1250.40 },
+  { "emisor": "Recambios Norte S.A.", "cliente": "Luis Gómez",  "fecha": "2026-04-15", "importe": 89.90 },
+  { "emisor": "Neumáticos Sur S.L.",  "cliente": "Marta Pérez", "fecha": "2026-05-02", "importe": 432.00 }
+]
+```
+
+Conclusiones:
+
+- **Extracción perfecta**: clientes y emisores correctos, fechas en ISO e importes numéricos. Es exactamente el caso que falló en el paso 2 con la clave ambigua `nombre`; con claves y tipos explícitos el modelo acierta. **La calidad de la instrucción importa más que el tamaño del modelo** para este tipo de tareas.
+- **Comportamiento agéntico correcto**: escribió los dos ficheros y después **los releyó para verificarlos** por iniciativa propia (`read facturas.json`) antes de dar la respuesta.
+- **Uso de recursos bajo**: la barra de estado de Pi mostraba 4,4K tokens enviados, 3,1K generados y un 96,4 % de acierto en la caché de prompt (`CH96.4%`). Al reutilizar la caché, Ollama solo procesa lo nuevo de cada turno, y por eso las respuestas son ágiles aunque el historial crezca.
+- **El shell de Pi es bash, no PowerShell**: el comando `!ii .` (abrir la carpeta en el Explorador) falló con `ii: command not found`, porque `ii` es un alias de PowerShell. Desde Pi hay que usar sintaxis de bash; para abrir el Explorador vale `explorer.exe .`.
+
+##### Ajuste recomendado: decirle a Pi el contexto real
+
+La barra de estado de Pi indicaba `1.9%/262k`: Pi cree que el modelo dispone de **262K tokens**, el máximo nativo de LFM3, pero el servidor Ollama lo sirve con **32K** (`OLLAMA_CONTEXT_LENGTH`). En sesiones cortas no importa, pero en una larga Pi no compactaría el historial a tiempo y Ollama descartaría por su cuenta el principio de la conversación, sin avisar. Para alinearlos, añade `contextWindow` al modelo en `%USERPROFILE%\.pi\agent\models.json`:
+
+```json
+"models": [{ "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 }]
+```
+
+Y reabre Pi (o usa `/model` para recargar). El contador debería pasar a `.../32k`.
+
 #### 3.4 Hermes Agent (opcional, más adelante)
 
 Hermes Agent de Nous Research ya tiene instalador nativo para Windows (`install.ps1`) que se instala en `%LOCALAPPDATA%\hermes` y se integra con `ollama launch hermes`. Es mucho más pesado (descarga Python, Node.js, Chromium, FFmpeg...) y su *system prompt* y herramientas son mucho mayores, lo que en CPU significa más tiempo de prefill en cada turno. Lo probaremos después de Pi para comparar.
@@ -514,6 +545,8 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 | `ollama run lfm3` descarga 1,1 GB | Tag por defecto es Q4_K_M | Usar `lfm3:1.7b-q8_0` |
 | Error `tools param requires --jinja flag` | Modelo importado desde `hf.co/...` sin parser | Usar el tag oficial `lfm3:...` de Ollama |
 | Un `.ps1` no se ejecuta por la política de ejecución | Scripts descargados bloqueados | `powershell -ExecutionPolicy Bypass -File .\scripts\<script>.ps1` |
+| `ii: command not found` dentro de Pi | Pi ejecuta comandos con Git Bash, no con PowerShell | Usar sintaxis bash, por ejemplo `explorer.exe .` |
+| Pi muestra `.../262k` de contexto | Pi lee el máximo nativo del modelo, no el de Ollama | Añadir `contextWindow: 32768` en `models.json` |
 | Logs del servidor | | `%LOCALAPPDATA%\Ollama` |
 
 ## Referencias
