@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Hermes Agent en curso; después, fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
+> Estado: fase 1 completada (instalación, chatbot, mini agente y Pi). Hermes Agent bloqueado por Defender en el PC corporativo; se probará en la fase 2 en Mac. Cada paso se valida en la máquina real antes de documentar el siguiente.
 
 ## Índice
 
@@ -521,6 +521,17 @@ Y reabre Pi (o usa `/model` para recargar). El contador debería pasar a `.../32
 
 La pregunta que queremos responder: **¿un arnés grande aporta algo con un modelo de 1,7B en CPU, o el coste de su prompt lo hace peor que Pi?**
 
+> **Resultado en el PC del trabajo (26/11/2026): no se pudo instalar.** El bloqueo no vino de la falta de permisos de administrador (Hermes se instala en el perfil de usuario) ni de Hermes o del modelo, sino de dos **reglas ASR (Attack Surface Reduction) de Microsoft Defender** gestionadas por TI:
+>
+> 1. **"Bloquear ejecutables que no cumplan criterios de prevalencia, antigüedad o lista de confianza".** Hermes crea un entorno virtual de Python cuyo `python.exe` es un binario reciente y poco extendido, y Defender no lo deja arrancar. Sin ese entorno no se pueden instalar las dependencias.
+> 2. **"Bloquear herramientas del sistema copiadas o suplantadas".** Hermes descarga un Git portable que incluye utilidades con el mismo nombre que las de Windows (`whoami.exe`, `hostname.exe`, `tar.exe`...), y Defender las bloquea.
+>
+> **Por qué Pi sí funcionó:** Pi se ejecuta sobre Node.js, un binario muy extendido y firmado que estas reglas no bloquean, y usa el Git for Windows ya instalado en el equipo. Hermes depende de una cadena de herramientas propia (uv, Python 3.14, Git portable y más binarios que descarga después) y casi todo eso cae en esas reglas.
+>
+> **Lección:** en un equipo corporativo, "no necesita admin" no basta. Conviene preferir herramientas que reutilicen runtimes ya instalados y firmados (Node.js, Git, Ollama) frente a las que traen su propia cadena de binarios. Para Hermes las alternativas serían pedir a TI una exclusión de esas reglas para las carpetas de Hermes, o un entorno de desarrollo aprobado (máquina virtual, Dev Box o WSL).
+>
+> **Decisión:** la comparación Pi frente a Hermes con LFM3 se hará en la [fase 2 en el Mac](#fase-2-mac-apple-silicon). Los pasos siguientes quedan documentados como referencia.
+
 ##### 3.4.1 Qué instala y dónde
 
 | Ruta | Contenido |
@@ -639,7 +650,11 @@ La documentación recomienda no borrar `%LOCALAPPDATA%\hermes` a mano.
 
 ## Fase 2: Mac (Apple Silicon)
 
-Pendiente. Previsto: instalar Ollama (aquí sí con admin) y usar la variante MLX de 8 bits `lfm3:1.7b-mxfp8`, optimizada para Apple Silicon, repitiendo las mismas mediciones para comparar con el PC Intel.
+Pendiente. Previsto:
+
+- Instalar Ollama (aquí sí con admin) y usar la variante MLX de 8 bits `lfm3:1.7b-mxfp8`, optimizada para Apple Silicon, repitiendo las mismas mediciones (pasos 1 y 2) para comparar con el PC Intel.
+- Repetir el mini agente y Pi.
+- **Comparación Pi frente a Hermes Agent** con las mismas cinco tareas (apartado 3.4.5), que no se pudo hacer en el PC corporativo.
 
 ## Plan B: llama.cpp portable
 
@@ -665,6 +680,7 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 | Un `.ps1` no se ejecuta por la política de ejecución | Scripts descargados bloqueados | `powershell -ExecutionPolicy Bypass -File .\scripts\<script>.ps1` |
 | `ii: command not found` dentro de Pi | Pi ejecuta comandos con Git Bash, no con PowerShell | Usar sintaxis bash, por ejemplo `explorer.exe .` |
 | Pi muestra `.../262k` de contexto | Pi lee el máximo nativo del modelo, no el de Ollama | Añadir `contextWindow: 32768` en `models.json` |
+| Defender bloquea `python.exe` o `whoami.exe`/`tar.exe` al instalar Hermes | Reglas ASR de prevalencia y de herramientas del sistema suplantadas | Pedir exclusión a TI, usar VM/Dev Box/WSL o probarlo en otro equipo |
 | Logs del servidor | | `%LOCALAPPDATA%\Ollama` |
 
 ## Referencias
