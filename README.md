@@ -57,8 +57,8 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 |---|---|---|---|
 | Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Máquina Linux | Mac (Apple Silicon) |
 | RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **8 GB** | Por definir |
-| Sistema | Windows | Linux (distribución por confirmar) | macOS |
-| Permisos | **Sin administrador** | Por confirmar | Administrador |
+| Sistema | Windows | Linux (distribución por confirmar), Intel Core i5 | macOS |
+| Permisos | **Sin administrador** | root / sudo | Administrador |
 | Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
 | Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
 
@@ -666,8 +666,8 @@ grep -o -w -E "avx2|avx512f|avx_vnni" /proc/cpuinfo | sort -u   # instrucciones 
 free -h                                # RAM total, usada y swap
 df -h ~                                # espacio libre en el home
 nproc                                  # núcleos disponibles
-sudo -n true 2>/dev/null && echo "sudo: sí" || echo "sudo: no (o pide contraseña)"
-command -v curl git node zstd          # herramientas ya instaladas
+command -v curl git python3 node      # herramientas ya instaladas
+node -v                                # Pi necesitará Node.js 22.19 o superior
 ```
 
 Por qué importa cada dato:
@@ -675,14 +675,78 @@ Por qué importa cada dato:
 - **RAM y swap:** el modelo Q8 ocupa unos 1,9 GB y el sistema y el escritorio pueden comerse 2 o 3 GB más. Si la memoria se agota, Linux tira de swap (lentísimo) o el OOM killer mata el proceso de Ollama.
 - **AVX2 / AVX-512 / AVX-VNNI:** llama.cpp (el motor de Ollama) usa estas instrucciones para multiplicar matrices. Sin AVX2 la velocidad cae mucho.
 - **Núcleos:** la generación en CPU escala con los núcleos físicos hasta que el cuello de botella pasa a ser el ancho de banda de memoria.
-- **sudo:** decide la forma de instalar Ollama (servicio de sistema o instalación de usuario).
+- **Node.js:** `npm 9.2.0` suele venir con Node.js 18 (el de los repositorios de Debian/Ubuntu), insuficiente para Pi. Lo resolveremos al llegar a ese paso.
 
 ### Paso L1: instalar Ollama y el modelo
 
-Pendiente del inventario. Habrá dos caminos según tengamos `sudo` o no:
+En este equipo sí tenemos `sudo`, así que usamos el **instalador oficial**, que deja Ollama como un servicio de `systemd` (arranca solo con el sistema y se gestiona con `systemctl`). Es la gran diferencia con Windows, donde Ollama era una app de usuario en la bandeja.
 
-- **Con sudo:** el instalador oficial (`curl -fsSL https://ollama.com/install.sh | sh`), que crea un servicio `systemd`.
-- **Sin sudo:** descomprimir el binario en `~/.local` y lanzar `ollama serve` como usuario, igual que en Windows sin admin.
+#### L1.1 Instalar Ollama
+
+```bash
+curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+less /tmp/ollama-install.sh        # opcional: revisarlo antes de ejecutarlo (q para salir)
+sh /tmp/ollama-install.sh
+```
+
+El script instala el binario en `/usr/local/bin/ollama`, crea el usuario de sistema `ollama` y el servicio `ollama.service`, y lo arranca.
+
+#### L1.2 Verificar el servicio
+
+```bash
+ollama --version                          # debe ser 0.40.13 o superior
+systemctl status ollama --no-pager        # debe estar "active (running)"
+curl -s http://localhost:11434/api/version
+```
+
+Los logs del servidor, equivalentes a `%LOCALAPPDATA%\Ollama` en Windows, se ven con:
+
+```bash
+journalctl -u ollama -f                   # Ctrl+C para salir
+```
+
+Nota: al ser un servicio, Ollama guarda los modelos en `/usr/share/ollama/.ollama/models` (el home del usuario `ollama`), no en tu home. Las variables de entorno como `OLLAMA_MODELS` u `OLLAMA_CONTEXT_LENGTH` **no se ponen en tu `.bashrc`** (el servicio no lo lee), sino en el propio servicio con `sudo systemctl edit ollama`. Es la versión Linux de la lección de `$env:` en Windows. Lo usaremos más adelante.
+
+#### L1.3 Medir la memoria antes de cargar el modelo
+
+```bash
+free -h
+```
+
+Anota la columna `available` de la fila `Mem`: es la RAM de la que dispone realmente el modelo.
+
+#### L1.4 Descargar el modelo Q8 e inspeccionarlo
+
+```bash
+ollama pull lfm3:1.7b-q8_0
+ollama list
+ollama show lfm3:1.7b-q8_0
+```
+
+Igual que en Windows: debe aparecer `Q8_0` y la capacidad `tools`.
+
+#### L1.5 Primera conversación con métricas
+
+```bash
+ollama run lfm3:1.7b-q8_0 --verbose
+```
+
+Usa la misma pregunta que en Windows para poder comparar, por ejemplo: `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.` Anota `prompt eval rate` y `eval rate`. Sin salir del chat, en otra terminal:
+
+```bash
+ollama ps
+free -h
+ps -C ollama -o pid,rss,cmd --sort=-rss | head -5      # RSS en KB de los procesos de Ollama
+```
+
+Sal con `/bye`.
+
+#### Resultado esperado del paso L1
+
+- [ ] Servicio `ollama` activo y versión 0.40.13 o superior
+- [ ] `lfm3:1.7b-q8_0` descargado (`Q8_0`, capacidad `tools`)
+- [ ] `eval rate` y `prompt eval rate` de la primera respuesta
+- [ ] RAM disponible antes y después de cargar el modelo
 
 ### Pruebas de estrés previstas
 
