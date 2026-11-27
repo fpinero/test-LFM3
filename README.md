@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 (Windows) y fase 2 (Linux con 8 GB) completadas; fase 3 (Mac) pendiente.
+> Estado: las tres fases (Windows, Linux con 8 GB y Mac) completadas.
 
 ## Índice
 
@@ -16,10 +16,11 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
 5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram)
-6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (pendiente)
-7. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
-8. [Resolución de problemas](#resolución-de-problemas)
-9. [Referencias](#referencias)
+6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon)
+7. [Chuleta de Ollama](#chuleta-de-ollama)
+8. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
+9. [Resolución de problemas](#resolución-de-problemas)
+10. [Referencias](#referencias)
 
 ## Qué es LFM3 y qué variante usamos
 
@@ -55,11 +56,11 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 | | Fase 1 | Fase 2 | Fase 3 |
 |---|---|---|---|
-| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | Mac (Apple Silicon) |
-| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | Por definir |
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | MacBook con **Apple M1 Pro** |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | **16 GB** de memoria unificada (CPU y GPU) |
 | Sistema | Windows | Ubuntu 24.04.5 LTS | macOS |
 | Permisos | **Sin administrador** | root / sudo | Administrador |
-| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
+| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | GGUF y MLX, 8 y 4 bits |
 | Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
 
 Nota sobre la NPU: ni Ollama ni llama.cpp usan la NPU de Intel; el modelo correrá en la CPU, que es justo para lo que está diseñado LFM3. Aprovechar la NPU requeriría la pila OpenVINO de Intel y una conversión del modelo, algo que queda fuera de esta primera prueba.
@@ -1205,11 +1206,484 @@ Con esto la cuantización de 4 bits queda validada también en una tarea agénti
 
 ## Fase 3: Mac (Apple Silicon)
 
-Pendiente. Previsto:
+Objetivo: repetir en el Mac las pruebas de Windows y Linux, comparar el formato **MLX** (propio de Apple Silicon) con el GGUF que hemos usado hasta ahora y, por fin, hacer la **comparación Pi frente a Hermes Agent** que no se pudo hacer en el PC corporativo.
 
-- Instalar Ollama (aquí sí con admin) y usar la variante MLX de 8 bits `lfm3:1.7b-mxfp8`, optimizada para Apple Silicon, repitiendo las mismas mediciones (pasos 1 y 2) para comparar con el PC Intel.
-- Repetir el mini agente y Pi.
-- **Comparación Pi frente a Hermes Agent** con las mismas cinco tareas (apartado 3.4.5), que no se pudo hacer en el PC corporativo.
+Qué cambia respecto a las fases anteriores:
+
+- **GPU integrada y memoria unificada**: en Apple Silicon la CPU y la GPU comparten la misma RAM. Ollama ejecuta el modelo en la GPU mediante Metal, así que esperamos ver `100% GPU` en `ollama ps` en lugar de `100% CPU`.
+- **Formato MLX**: además del GGUF de llama.cpp, LFM3 se publica en formato MLX, el framework de Apple para su hardware. En Ollama son tags distintos del mismo modelo:
+
+| Tag | Formato | Tamaño | Equivale a |
+|---|---|---|---|
+| `lfm3:1.7b-q8_0` | GGUF, 8 bits | 1,8 GB | El que usamos en Windows y Linux |
+| `lfm3:1.7b-mxfp8` | MLX, 8 bits en coma flotante (MXFP8) | 2,1 GB | La versión de 8 bits para Apple Silicon |
+| `lfm3:1.7b-nvfp4` | MLX, 4 bits en coma flotante (NVFP4) | 1,7 GB | La versión de 4 bits para Apple Silicon |
+| `lfm3:1.7b-qad-q4_0` | GGUF, 4 bits QAD | 1,0 GB | La recomendada en Linux con 8 GB |
+
+- **Administrador**: aquí sí, así que se instala todo de la forma estándar.
+
+### Paso M0: inventario del Mac
+
+```bash
+sw_vers                                                    # versión de macOS (Ollama necesita Sonoma 14 o superior)
+system_profiler SPHardwareDataType | grep -E "Model Name|Chip|Total Number of Cores|Memory"
+sysctl -n machdep.cpu.brand_string                         # chip
+sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}'   # RAM total
+memory_pressure | tail -1                                  # porcentaje de memoria libre
+df -h ~ | tail -1                                          # espacio en disco
+command -v brew git python3 node jq ollama                 # herramientas ya instaladas
+node -v; python3 --version; ollama --version 2>/dev/null   # versiones
+```
+
+Por qué importa cada dato:
+
+- **Chip (M1, M2, M3, M4...) y núcleos de GPU**: determinan la velocidad. En Apple Silicon el ancho de banda de memoria es muy superior al de los PC de las fases anteriores, y la generación de tokens depende sobre todo de eso.
+- **RAM**: al ser memoria unificada, el modelo y el sistema comparten la misma memoria. Con LFM3 (1 a 2 GB) no debería ser un problema en ningún Mac actual.
+- **Node.js**: Pi necesita la versión 22.19 o superior.
+- **Ollama**: si ya está instalado, comprobaremos que la versión sea reciente (LFM3 requiere 0.40.12 o superior en macOS).
+
+### Paso M1: instalar Ollama y los modelos
+
+#### M1.1 Instalar Ollama
+
+Si no está instalado, descarga la app desde <https://ollama.com/download/mac>, arrastra `Ollama.app` a Aplicaciones y ábrela. La app instala también el comando `ollama` en el terminal y deja el servidor escuchando en `http://localhost:11434`, con un icono en la barra de menús. Alternativa con Homebrew: `brew install --cask ollama`.
+
+```bash
+ollama --version
+curl -s http://localhost:11434/api/version
+```
+
+Rutas en macOS: modelos en `~/.ollama/models` y logs en `~/.ollama/logs` (`server.log` y `app.log`).
+
+#### M1.2 Descargar los dos modelos de 8 bits
+
+```bash
+ollama pull lfm3:1.7b-q8_0       # GGUF, el mismo que en Windows y Linux
+ollama pull lfm3:1.7b-mxfp8      # MLX, específico de Apple Silicon
+ollama list
+ollama show lfm3:1.7b-mxfp8
+```
+
+En `ollama show` comprueba el formato y que aparezca la capacidad `tools` en ambos.
+
+#### M1.3 Primera conversación con cada formato
+
+La misma presentación que en las fases anteriores, primero con el GGUF y después con el MLX:
+
+```bash
+ollama run lfm3:1.7b-q8_0 --verbose
+```
+
+Escribe `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.`, anota `prompt eval rate` y `eval rate` y, sin salir, en otra terminal:
+
+```bash
+ollama ps
+```
+
+Fíjate en la columna `PROCESSOR` (esperamos `100% GPU`). Sal con `/bye` y repite con `ollama run lfm3:1.7b-mxfp8 --verbose`.
+
+#### Resultado esperado del paso M1
+
+- [x] Ollama instalado
+- [x] `lfm3:1.7b-q8_0` y `lfm3:1.7b-mxfp8` descargados
+- [x] `eval rate` y `prompt eval rate` de cada formato
+- [x] `PROCESSOR` en `ollama ps`: 100 % GPU en ambos
+
+#### Resultados del paso M1 (27/11/2026)
+
+Misma presentación que en las fases anteriores, con `ollama run --verbose`:
+
+| Métrica | GGUF `lfm3:1.7b-q8_0` | MLX `lfm3:1.7b-mxfp8` |
+|---|---|---|
+| `prompt eval rate` (prefill) | 121,73 tok/s | 18,01 tok/s |
+| `eval rate` (generación) | **74,68 tok/s** | **61,71 tok/s** |
+| Tokens generados (con razonamiento) | 153 | 138 |
+| Tiempo total | **2,3 s** | 4,3 s |
+| `ollama ps`: tamaño, procesador | 1,9 GB, **100 % GPU** | 2,0 GB, **100 % GPU** |
+| `ollama ps`: runner | `llamacpp` | `mlx` |
+
+Comparación con las otras máquinas (GGUF Q8, misma pregunta):
+
+| Equipo | Generación | Tiempo total |
+|---|---|---|
+| Linux, i5-5200U (CPU) | 4,89 tok/s | 34,6 s |
+| Windows, Core Ultra 5 135U (CPU) | 23,83 tok/s | 14,9 s |
+| **Mac, Apple Silicon (GPU)** | **74,68 tok/s** | **2,3 s** |
+
+Conclusiones:
+
+- **El Mac es unas 3 veces más rápido que el PC Windows y 15 veces más que el portátil Linux.** La diferencia viene de la GPU integrada y, sobre todo, del ancho de banda de la memoria unificada de Apple Silicon, que es lo que limita la generación de tokens. Con razonamiento incluido, la respuesta completa tarda 2,3 s: la experiencia es fluida incluso dejando pensar al modelo.
+- **Ollama usa motores distintos según el formato**: la columna `RUNNER` muestra `llamacpp` para el GGUF y `mlx` para el MLX. Es el mismo modelo, servido por dos motores de inferencia diferentes.
+- **Sorpresa: el GGUF fue más rápido que el MLX** (74,7 frente a 61,7 tok/s en generación). Hay que tomarlo con cautela: es una sola medida, el MXFP8 ocupa algo más (2,0 frente a 1,9 GB) y el **prefill tan bajo del MLX (18 tok/s)** apunta a un coste de arranque en la primera petición (compilación de los *kernels* de Metal), no a su velocidad real. El banco de pruebas del paso M2, con repeticiones, lo aclarará.
+- **Dos modelos cargados a la vez**: `ollama ps` mostraba los dos modelos en memoria al mismo tiempo. Ollama mantiene varios modelos cargados si caben (`OLLAMA_MAX_LOADED_MODELS`, por defecto 3) y cada uno se descarga al acabar su `keep_alive`. En el portátil de 8 GB esto habría sido un problema; aquí no.
+
+### Paso M2: banco de pruebas con los cuatro formatos
+
+Con `scripts/bench.py` comparamos los cuatro tags de la tabla del principio de esta fase, con y sin razonamiento y con dos repeticiones (la primera petición de cada modelo hace de calentamiento):
+
+```bash
+cd ~/my_Repos/test-LFM3
+git pull
+ollama pull lfm3:1.7b-nvfp4
+ollama pull lfm3:1.7b-qad-q4_0
+python3 scripts/bench.py --models lfm3:1.7b-q8_0 lfm3:1.7b-mxfp8 lfm3:1.7b-qad-q4_0 lfm3:1.7b-nvfp4 --repeticiones 2
+```
+
+En el Mac debería tardar pocos minutos. El script descarga cada modelo antes de cargar el siguiente, para que las medidas no se interfieran. En macOS las columnas de memoria son aproximadas: la memoria que usa la GPU no siempre se refleja en la RSS del proceso, así que la referencia fiable es el tamaño de `ollama ps`.
+
+Preguntas que queremos responder:
+
+1. ¿El MLX es más lento de verdad o era el calentamiento?
+2. ¿Cuánto se gana con 4 bits en una GPU, donde el cuello de botella es menor que en CPU?
+3. ¿Se mantiene la calidad del JSON en los cuatro formatos?
+
+#### Resultados del paso M2 (27/11/2026)
+
+Equipo: **Apple M1 Pro con 16 GB** de memoria unificada. Salida de `bench.py` con los cuatro formatos y 2 repeticiones (`num_ctx` 4096):
+
+| Modelo | Formato / motor | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | Tamaño en memoria (`ollama ps`) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b-q8_0` | GGUF / llama.cpp | no | 77.29 | 42 | 0.7 | 1,8 GB | ok, ok |
+| `lfm3:1.7b-q8_0` | GGUF / llama.cpp | sí | 75.05 | 450 | 6.0 | | ok, ok |
+| `lfm3:1.7b-mxfp8` | MLX | no | 61.60 | 44 | 1.1 | 1,9 GB | ok, ok |
+| `lfm3:1.7b-mxfp8` | MLX | sí | 64.32 | 499 | 7.8 | | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | GGUF / llama.cpp | no | **115.20** | 54 | **0.6** | 1,1 GB | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | GGUF / llama.cpp | sí | **113.14** | 669 | 6.0 | | ok, ok |
+| `lfm3:1.7b-nvfp4` | MLX | no | 72.71 | 46 | 0.9 | 1,6 GB | ok, ok |
+| `lfm3:1.7b-nvfp4` | MLX | sí | 74.99 | 678 | 9.2 | | ok, ok |
+
+La columna de RSS de `bench.py` no es comparable en el Mac: para los modelos MLX marcaba 300-450 MB porque la memoria que reserva la GPU (Metal) no se refleja en la RSS del proceso. La referencia fiable es el tamaño de `ollama ps`.
+
+Conclusiones:
+
+- **No era el calentamiento: en este Mac el GGUF es más rápido que el MLX.** Con repeticiones, la Q8 GGUF genera a 77 tok/s y la MXFP8 a 62-64, un 20 % menos. Lo mismo con 4 bits: QAD Q4_0 (GGUF) a 115 tok/s frente a NVFP4 (MLX) a 73-75.
+- **Una explicación probable: el M1 Pro no tiene soporte nativo para los formatos de coma flotante de 8 y 4 bits** (MXFP8 y NVFP4 se diseñaron pensando en GPU recientes). Al no poder calcular directamente con ellos, el chip tiene que convertir los pesos sobre la marcha, mientras que los formatos enteros de llama.cpp (Q8_0, Q4_0) tienen *kernels* de Metal muy optimizados. En chips más nuevos (M3, M4 y siguientes) el resultado podría cambiar.
+- **QAD Q4_0 es la más rápida con diferencia: 115 tok/s**, un 50 % más que la Q8. Igual que en CPU, en GPU la generación también está limitada por cuántos bytes hay que leer por token.
+- **La calidad del JSON se mantiene en los cuatro formatos** (8 de 8 correctos).
+- **A esta velocidad el razonamiento deja de ser un problema**: una respuesta con razonamiento tarda de media 6 s (frente a 85 s en el portátil Linux con Q8). En el Mac se puede dejar activado casi siempre y aprovechar su mejor fiabilidad en tareas complejas.
+- **El razonamiento sigue siendo muy variable**: de 175 a 612 tokens en la misma pregunta de Kubernetes con QAD, o de 979 a 1.117 con NVFP4.
+
+**Elección para Pi y Hermes en el Mac**: `lfm3:1.7b-q8_0`. Es la que se recomendó en la charla para tareas agénticas, la misma que usamos en Windows (comparación directa) y a 77 tok/s va sobrada. QAD Q4_0 queda como alternativa si se busca la máxima velocidad.
+
+### Paso M3: Pi en el Mac
+
+En el Mac las pruebas de chat y del mini agente serían una repetición casi instantánea de lo ya visto, así que pasamos directamente a los arneses (si quieres verlos, `python3 scripts/chat.py` y `python3 scripts/agente_mini.py` ya funcionan en macOS).
+
+#### M3.1 Node.js
+
+```bash
+node -v      # Pi necesita 22.19 o superior
+```
+
+Si no está instalado o es más antiguo: `brew install node`, y después `hash -r` y `node -v`.
+
+#### M3.2 Configurar Ollama: contexto y permanencia en memoria
+
+En macOS la app de Ollama lee las variables de entorno de `launchctl` (es el equivalente a la variable de usuario de Windows o al override de systemd de Linux):
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 32768
+launchctl setenv OLLAMA_KEEP_ALIVE 30m
+```
+
+Después **sal de Ollama desde el icono de la barra de menús** (*Quit Ollama*) y vuelve a abrirlo. Para comprobarlo, tras la primera petición `ollama ps` debe mostrar `CONTEXT 32768` y `UNTIL 29 minutes from now`.
+
+Ojo: `launchctl setenv` **no sobrevive a un reinicio del Mac**. Para hacerlo permanente hay que crear un *LaunchAgent* (un `.plist` en `~/Library/LaunchAgents` que ejecute esos comandos al iniciar sesión); para estas pruebas no hace falta.
+
+#### M3.3 Instalar y lanzar Pi
+
+```bash
+mkdir -p ~/pi-sandbox && cd ~/pi-sandbox
+ollama launch pi --model lfm3:1.7b-q8_0
+```
+
+Y desde el principio, en `~/.pi/agent/models.json`, el contexto real para que la barra de estado de Pi muestre `.../32k`:
+
+```json
+"models": [
+  { "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 },
+  { "id": "lfm3:1.7b-qad-q4_0", "contextWindow": 32768 }
+]
+```
+
+#### M3.4 Tareas
+
+Las mismas cinco del apartado 3.3.4, en `~/pi-sandbox`:
+
+1. `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. La extracción de facturas a `facturas.json` (mismo texto que en Windows).
+5. `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Anota el **tiempo aproximado de cada tarea** (con un cronómetro o mirando la hora): será la referencia para comparar con Hermes en el paso M4.
+
+#### M3.5 Resultados (27/11/2026)
+
+`ollama ps` confirma que `launchctl setenv` funcionó: `lfm3:1.7b-q8_0`, 2,0 GB, `100% GPU`, contexto `32768`, runner `llamacpp` y `29 minutes from now`.
+
+| Tarea | Resultado | Observaciones |
+|---|---|---|
+| 1. Versiones | Correcto | `node --version` y `git --version` (v26.11.1 y 2.56.0), respuesta en una tabla |
+| 2. Crear notas.md | Correcto | Escribe el fichero y lo relee para verificarlo |
+| 3. Editar notas.md | Correcto, con matiz | Usa `edit` sobre la última línea, pero la "ventaja de privacidad" que añade es *Independencia de proveedores*, relacionada con la privacidad solo de forma indirecta |
+| 4. Facturas a JSON | Correcto al cuarto intento | Intenta tres scripts de Python para extraer los datos y los tres fallan (expresión regular mal hecha, `int('mar')`, desempaquetado incorrecto); al final escribe el JSON directamente con los datos que ya había extraído en su razonamiento, y lo hace perfecto |
+| 5. Validar y sumar | Correcto | Valida con `python3 -c "import json..."`, obtiene `1772.3000000000002` y explica que es un artefacto de coma flotante: el total es 1.772,30 € |
+
+Impresión de Fernando: *"todo ha ido súper fluido con Pi, todas las tareas se han ejecutado muy rápidas"*. No hizo falta cronometrar: cada tarea tardó unos pocos segundos, frente a minutos en el portátil Linux.
+
+Lo que nos enseña:
+
+- **La velocidad cambia la experiencia**: con 77 tok/s el razonamiento (en inglés, como siempre) y los reintentos pasan casi desapercibidos. En Linux los tres scripts fallidos de la tarea 4 habrían costado varios minutos.
+- **El modelo extrae datos mejor que programa un extractor**: el razonamiento ya tenía los cuatro campos bien sacados desde el principio, pero se empeñó en escribir un *parser* y falló tres veces. Con un modelo de 1,7B, para textos cortos conviene pedirle explícitamente que extraiga él mismo los datos ("sin escribir código").
+- **Sabe recuperarse**: ante los errores no entró en bucle, cambió de estrategia y terminó bien. También detectó solo el problema de coma flotante de la tarea 5.
+- **Ojo con lo que Pi carga al arrancar**: en este Mac Pi ya tenía *skills* (`find-skills`, `hyperframes`...) y la extensión `@ollama/pi-web-search` instaladas de usos anteriores. Todo eso se añade al prompt de cada petición; para comparar de forma justa con Hermes hay que tenerlo en cuenta.
+
+### Paso M4: Hermes Agent en el Mac
+
+Ahora sí, la prueba que no pudimos hacer en el PC del trabajo (ver [3.4](#34-hermes-agent)): **¿aporta algo un arnés grande como Hermes con un modelo de 1,7B, o su prompt lo hace más lento y torpe que Pi?** En el Mac eres administrador y no hay reglas ASR, así que el instalador debería funcionar sin problemas.
+
+#### M4.1 Subir el contexto a 64K
+
+Hermes **exige al menos 64.000 tokens de contexto** y rechaza al arrancar modelos con menos. Subimos el del servidor (con las 6 capas de atención de LFM3 la memoria apenas crece):
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 65536
+```
+
+Sal de Ollama desde la barra de menús y vuelve a abrirlo. Si quieres volver a Pi más adelante, 64K también le sirve (o deja `contextWindow` en 32768, que sigue siendo coherente porque es menor que el real).
+
+#### M4.2 Instalar Hermes revisando antes el script
+
+La documentación propone `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`, pero igual que en Windows es mejor descargarlo y leerlo antes de ejecutarlo:
+
+```bash
+mkdir -p ~/hermes-install && cd ~/hermes-install
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o install-hermes.sh
+less install-hermes.sh          # échale un vistazo; q para salir
+bash install-hermes.sh --skip-browser --skip-computer-use
+```
+
+`--skip-browser` y `--skip-computer-use` evitan descargar Chromium y el controlador de *computer use*, que no necesitamos. Al terminar:
+
+```bash
+source ~/.zshrc
+hermes --version
+hermes doctor        # revisa la configuración y las dependencias
+```
+
+Dónde queda cada cosa:
+
+| Ruta | Contenido |
+|---|---|
+| `~/.hermes/hermes-agent/` | Código fuente |
+| `~/.local/bin/hermes` | Lanzador |
+| `~/.hermes/config.yaml` | Configuración (proveedor, modelo, herramientas) |
+| `~/.hermes/.env` | Secretos (claves de API; aquí no habrá ninguno) |
+
+#### M4.3 Conectar Hermes con LFM3
+
+```bash
+ollama launch hermes
+```
+
+En el selector elige `lfm3:1.7b-q8_0` y, si pregunta por mensajería (Telegram, Slack...), sáltalo. Ollama configura Hermes con el endpoint `http://127.0.0.1:11434/v1` y lo arranca; sal con `/exit` o `Ctrl+D` para hacer antes dos comprobaciones:
+
+```bash
+cat ~/.hermes/config.yaml
+hermes prompt-size      # tamaño del system prompt y de las herramientas
+```
+
+**Anota lo que muestre `hermes prompt-size`**: es la cifra clave de la comparación. Si `ollama launch hermes` diera problemas, la alternativa es `hermes model` > *More providers...* > *Custom endpoint*, URL `http://127.0.0.1:11434/v1`, sin clave de API y modelo `lfm3:1.7b-q8_0`.
+
+**Lo que configuró `ollama launch hermes` en el Mac (27/11/2026)**: una configuración ya bastante adelgazada. Deja activos en la CLI solo los conjuntos `file`, `skills`, `terminal` y `vision` (11 herramientas), y desactiva el resto: navegador, web, memoria, subagentes, cron, generación de imágenes, mensajería... También deja la memoria persistente y la compresión del historial desactivadas, `reasoning_effort: medium` y avisos de bucles de herramientas (`tool_loop_guardrails`) activados.
+
+Salida de `hermes prompt-size`:
+
+| Bloque | Tamaño |
+|---|---|
+| System prompt | 9,1 KB (de ellos 3,4 KB son el índice de 43 *skills* incluidas) |
+| Esquemas de herramientas | 14,4 KB (11 herramientas: `file` 5,0 KB, `skills` 4,6 KB, `terminal` 2,6 KB, otras 2,2 KB) |
+| **Total por petición** | **~23,5 KB, unos 6.000 tokens** |
+
+Es aproximadamente **diez veces el prompt base de Pi**. En el Mac no debería notarse mucho: el *prefill* en GPU es rápido y Ollama reutiliza la caché del prompt entre turnos. Dos cosas que no aportan nada con LFM3: el índice de *skills* (`p5js`, `songwriting-and-ai-music`, `manim-video`...) y la herramienta `vision`, porque nuestro modelo es solo de texto. Las dejamos en la primera pasada para medir Hermes tal como viene, y las quitamos en el apartado opcional M4.6.
+
+#### M4.4 Mismas tareas que con Pi
+
+```bash
+mkdir -p ~/hermes-sandbox && cd ~/hermes-sandbox
+hermes
+```
+
+Las cinco tareas de siempre (apartado M3.4), copiadas tal cual. Para cada una fíjate en: tiempo aproximado, si acierta, cuántas herramientas usa y si se atasca. En otra terminal, `ollama ps` debe mostrar `CONTEXT 65536`.
+
+#### M4.5 Resultados: Pi frente a Hermes (27/11/2026)
+
+`ollama ps` durante la prueba: `lfm3:1.7b-q8_0`, 2,1 GB (100 MB más que con 32K de contexto), `100% GPU`, contexto `65536`.
+
+Hermes muestra al final de cada tarea su duración y lo que hizo; Pi no, así que para Pi solo tenemos la impresión de "unos segundos".
+
+| Tarea | Pi | Hermes |
+|---|---|---|
+| 1. Versiones | Correcto. Git 2.56.0 | Correcto en 12,4 s (un comando). Git 2.50.1 (Apple Git) |
+| 2. Crear notas.md | Correcto, relee el fichero para verificarlo | Correcto en 6,2 s, sin releerlo (se fía de la confirmación de la herramienta) |
+| 3. Editar notas.md | Correcto con `edit`; ventaja poco ligada a la privacidad | Correcto en 10,9 s; reescribe el fichero entero con `write_file`; ventaja *Privacidad total*, bien enfocada |
+| 4. Facturas a JSON | Correcto tras 3 scripts de Python fallidos | **Perfecto a la primera en 27,1 s**, extrayendo los datos él mismo, sin código |
+| 5. Validar y sumar | Correcto (1.772,30) con `json.load` | Correcto en 13,3 s con `python3 -m json.tool`, más tabla de detalle y aviso de coma flotante |
+| **Total** | Unos segundos por tarea | **70 s las cinco tareas** |
+
+Impresión de Fernando: *"Hermes ha funcionado muy rápido, ha tenido que pensar menos que Pi para llegar a las soluciones, se ve un arnés más trabajado"*.
+
+Lo que nos enseña:
+
+- **Un prompt diez veces mayor no ha hecho a Hermes más lento ni más torpe**, al contrario. En una GPU el coste de procesar ~6.000 tokens de prompt es de décimas de segundo, y Ollama reaprovecha la caché entre turnos. En el portátil Linux, a 17 tok/s de *prefill*, ese mismo prompt costaría unos 6 minutos en la primera petición: **el tamaño del arnés importa mucho en CPU y poco en GPU**.
+- **Las instrucciones del arnés guían a un modelo pequeño**: los razonamientos de Hermes son de 1 a 10 s y van más al grano. En la tarea 4 extrajo los datos directamente en lugar de programar un *parser*, que es justo lo que a Pi le salió mal. Parte del mérito puede ser también que el prompt de Pi en este Mac arrastra *skills* y extensiones de usos anteriores.
+- **Hermes confía en sus herramientas**: no relee lo que escribe porque `write_file` le devuelve los bytes escritos y la ruta. Es más rápido, pero en la tarea 3 reescribió el fichero completo en lugar de añadir una línea; con ficheros grandes eso es más arriesgado (y más lento) que un `patch`.
+- **Cada arnés ve un `PATH` distinto**: Pi encontró el Git de Homebrew (2.56.0) y Hermes el de Apple (`/usr/bin/git`, 2.50.1). Hermes ejecuta los comandos en su propio entorno y no carga la configuración de la shell igual que una terminal interactiva. Si un agente tiene que usar una versión concreta de una herramienta, conviene comprobar qué ve.
+- **El contexto de 64K apenas cuesta memoria**: 2,1 GB frente a 2,0 GB con 32K, gracias a las 6 capas de atención de LFM3.
+
+### Conclusiones de la fase Mac
+
+- **En Apple Silicon M1 Pro, GGUF gana a MLX**: `q8_0` a 77 tok/s frente a 62 de `mxfp8`, y `qad-q4_0` a 115 tok/s como opción más rápida. La calidad es la misma en los cuatro formatos.
+- **Con 75 a 115 tok/s el razonamiento deja de ser un problema**, así que se puede dejar activado y aprovechar su mejor fiabilidad.
+- **En el Mac Hermes es mejor opción que Pi** para tareas agénticas con LFM3: más rápido en la práctica, menos razonamiento y mejores decisiones. En un equipo sin GPU (como el portátil Linux) Pi sigue siendo la opción sensata por su prompt mínimo.
+- **Configuración recomendada para el Mac**: Ollama con `OLLAMA_CONTEXT_LENGTH=65536` y `OLLAMA_KEEP_ALIVE=30m` (vía `launchctl setenv`), `lfm3:1.7b-q8_0` (o `qad-q4_0` si se busca velocidad) y Hermes configurado con `ollama launch hermes`.
+
+| Equipo | Generación Q8 | Mejor formato | Arnés recomendado |
+|---|---|---|---|
+| Windows, Core Ultra 5, 31 GB (CPU) | ~24 tok/s | `q8_0` | Pi (Hermes bloqueado por Defender) |
+| Linux, i5-5200U, 8 GB (CPU) | ~5,8 tok/s | `qad-q4_0` (10 tok/s) | Pi |
+| Mac M1 Pro, 16 GB (GPU) | ~77 tok/s | `q8_0` o `qad-q4_0` (115 tok/s) | Hermes |
+
+#### M4.6 (Opcional) Adelgazar Hermes
+
+Si va lento o se confunde eligiendo herramientas, desactiva los conjuntos que no hacen falta (con LFM3, `skills` y `vision` son los candidatos claros: unos 8 KB menos) y repite la tarea 4:
+
+```bash
+hermes tools          # activar o desactivar conjuntos de herramientas
+hermes prompt-size    # comprobar cuánto ha bajado el prompt
+```
+
+#### M4.7 Desinstalar (cuando acabemos)
+
+```bash
+hermes uninstall --dry-run   # muestra qué borraría
+hermes uninstall --full      # elimina también configuración y datos
+```
+
+
+## Chuleta de Ollama
+
+Referencia rápida de lo que más se usa en el día a día, recopilado a lo largo de las tres fases. La columna "Visto en" indica dónde lo hemos usado en este proyecto.
+
+### Comandos del terminal
+
+| Comando | Para qué sirve | Visto en |
+|---|---|---|
+| `ollama pull <modelo>` | Descargar un modelo o actualizarlo | Todas las fases |
+| `ollama list` (o `ollama ls`) | Ver los modelos descargados y su tamaño | Todas |
+| `ollama show <modelo>` | Ver arquitectura, cuantización, contexto máximo y capacidades (`tools`, `thinking`...) | Paso 1.6 |
+| `ollama show --modelfile <modelo>` | Ver el Modelfile: plantilla, parámetros por defecto y sistema | |
+| `ollama run <modelo>` | Chat interactivo en el terminal | Paso 1.7 |
+| `ollama run <modelo> --verbose` | Igual, mostrando métricas tras cada respuesta (tokens/s de prefill y generación) | Pasos 1.7 y L1 |
+| `ollama run <modelo> "pregunta"` | Respuesta única, útil en scripts | |
+| `ollama ps` | Modelos cargados en memoria: tamaño, `PROCESSOR` (CPU/GPU), contexto y cuándo se descargarán | Todas |
+| `ollama stop <modelo>` | Descargar un modelo de memoria al momento | |
+| `ollama rm <modelo>` | Borrar un modelo del disco | |
+| `ollama cp <origen> <destino>` | Copiar un modelo con otro nombre (por ejemplo, antes de personalizarlo) | |
+| `ollama create <nombre> -f Modelfile` | Crear un modelo propio a partir de un Modelfile | |
+| `ollama launch <integración> --model <modelo>` | Instalar, configurar y lanzar una herramienta conectada a Ollama (Pi, Hermes, OpenCode, Claude Code, Codex...) | Pasos 3.3 y L4 |
+| `ollama launch <integración> --config` | Solo configurar la integración, sin lanzarla | |
+| `ollama serve` | Arrancar el servidor a mano (cuando no se usa la app ni el servicio) | |
+| `ollama serve --help` | Lista completa de variables de entorno que admite el servidor | |
+
+### Comandos dentro de `ollama run`
+
+| Comando | Para qué sirve |
+|---|---|
+| `/?` | Ayuda con todos los comandos disponibles en tu versión |
+| `/set parameter num_ctx 16384` | Cambiar un parámetro para esta sesión (vale cualquiera de la tabla de parámetros) |
+| `/set system "..."` | Cambiar las instrucciones de sistema |
+| `/set think` y `/set nothink` | Activar o desactivar el razonamiento |
+| `/show info` | Información del modelo cargado |
+| `/save <nombre>` | Guardar la sesión actual (parámetros y sistema) como un modelo nuevo |
+| `/clear` | Borrar el historial de la conversación |
+| `/bye` | Salir |
+
+Los comandos con `/` pueden variar entre versiones; `/?` muestra los de la tuya.
+
+### Variables de entorno del servidor
+
+| Variable | Por defecto | Para qué sirve | Visto en |
+|---|---|---|---|
+| `OLLAMA_MODELS` | `~/.ollama/models` (Mac y Windows), `/usr/share/ollama/.ollama/models` (Linux) | Carpeta donde se guardan los modelos | Paso 1.3 |
+| `OLLAMA_CONTEXT_LENGTH` | 4096 | Contexto por defecto cuando la petición no fija `num_ctx` (por ejemplo, desde la API compatible con OpenAI) | Pasos 3.3 y L4 |
+| `OLLAMA_KEEP_ALIVE` | 5m | Tiempo que el modelo sigue en memoria sin uso. `-1` = siempre, `0` = descargar al terminar | Paso L4 |
+| `OLLAMA_HOST` | `127.0.0.1:11434` | Dirección y puerto. `0.0.0.0:11434` lo expone a la red local (con cuidado: no tiene autenticación) | |
+| `OLLAMA_NUM_PARALLEL` | 1 | Peticiones simultáneas por modelo. La memoria del contexto se multiplica por este valor | |
+| `OLLAMA_MAX_LOADED_MODELS` | 3 (por GPU) | Cuántos modelos distintos pueden estar cargados a la vez | |
+| `OLLAMA_MAX_QUEUE` | 512 | Peticiones en cola antes de responder con error 503 | |
+| `OLLAMA_FLASH_ATTENTION` | Automático | `1` fuerza Flash Attention, `0` lo desactiva. Reduce memoria con contextos grandes | |
+| `OLLAMA_KV_CACHE_TYPE` | `f16` | Cuantiza la caché KV: `q8_0` (mitad de memoria) o `q4_0` (una cuarta parte). Requiere Flash Attention | |
+| `OLLAMA_ORIGINS` | Solo local | Orígenes web permitidos (extensiones de navegador, apps web) | |
+| `OLLAMA_NO_CLOUD` | Sin definir | `1` desactiva las funciones en la nube de Ollama | |
+| `HTTPS_PROXY` | Sin definir | Proxy para descargar modelos detrás de un proxy corporativo | |
+
+**Cómo se definen** (la lección que hemos aprendido en cada sistema):
+
+| Sistema | Cómo | Después |
+|---|---|---|
+| Windows | `[Environment]::SetEnvironmentVariable("VAR", "valor", "User")` (no `$env:`, que solo dura en esa ventana) | Salir de Ollama desde la bandeja y volver a abrirlo |
+| Linux (servicio systemd) | `sudo systemctl edit ollama` y `Environment="VAR=valor"` en `[Service]` (no `.bashrc`) | `sudo systemctl restart ollama` |
+| macOS (app) | `launchctl setenv VAR valor` | Salir de Ollama desde la barra de menús y volver a abrirlo |
+
+### Parámetros del modelo
+
+Se pueden fijar en cada petición a la API (`options`), en `ollama run` con `/set parameter` o de forma permanente en un Modelfile con `PARAMETER`.
+
+| Parámetro | Por defecto de Ollama | Recomendado para LFM3 | Para qué sirve |
+|---|---|---|---|
+| `num_ctx` | 4096 | 4096 para chat, 32768 para agentes | Tamaño de la ventana de contexto en tokens |
+| `temperature` | 0.8 | **0.1** (1.0 para matemáticas) | Aleatoriedad. Bajo = respuestas más deterministas |
+| `top_k` | 40 | **50** (20 para matemáticas) | Solo elige entre los K tokens más probables |
+| `top_p` | 0.9 | 0.95 solo para matemáticas | Solo elige entre los tokens que suman esa probabilidad |
+| `repeat_penalty` | 1.0 | **1.1** | Penaliza repetir texto |
+| `num_predict` | -1 (sin límite) | | Máximo de tokens a generar. Útil para cortar respuestas largas (pero puede cortar el razonamiento a medias) |
+| `seed` | 0 (aleatorio) | Un número fijo para pruebas | Hace las respuestas reproducibles |
+| `stop` | | | Textos que detienen la generación |
+
+### Opciones de la API (`/api/chat`)
+
+| Campo | Para qué sirve | Visto en |
+|---|---|---|
+| `messages` | Historial completo de la conversación (`system`, `user`, `assistant`, `tool`) | `chat.py` |
+| `tools` | Lista de herramientas en JSON Schema que el modelo puede pedir | `agente_mini.py` |
+| `think` | `true`/`false`: activa o desactiva el razonamiento **en cada petición** | Pasos 2 y L2 |
+| `format` | `"json"` o un JSON Schema completo: obliga a que la respuesta cumpla esa estructura | |
+| `stream` | `true` devuelve el texto a medida que se genera | `chat.py` |
+| `keep_alive` | Igual que `OLLAMA_KEEP_ALIVE`, pero para esta petición (`0` descarga el modelo) | `bench.py` |
+| `options` | Parámetros del modelo de la tabla anterior | Todos los scripts |
+
+La API compatible con OpenAI (`/v1/chat/completions`) es la que usan Pi, Hermes y la mayoría de herramientas. Es cómoda, pero **no permite fijar `num_ctx` por petición**: por eso hay que subir `OLLAMA_CONTEXT_LENGTH` en el servidor.
+
+### Modelfile: personalizar un modelo
+
+Un Modelfile permite crear una variante con los parámetros recomendados ya fijados, para no tener que pasarlos en cada petición:
+
+```text
+FROM lfm3:1.7b-q8_0
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx 32768
+SYSTEM "Eres un asistente técnico. Responde en español, de forma breve y precisa."
+```
+
+```bash
+ollama create lfm3-agente -f Modelfile
+ollama run lfm3-agente
+```
+
 
 ## Plan B: llama.cpp portable
 
@@ -1251,3 +1725,7 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 - Hermes con Ollama: <https://docs.ollama.com/integrations/hermes>
 - Instalación de Hermes Agent: <https://hermes-agent.nousresearch.com/docs/getting-started/installation>
 - Hermes en Windows nativo: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
+- Preguntas frecuentes y variables de entorno de Ollama: <https://docs.ollama.com/faq>
+- Comandos de Ollama: <https://docs.ollama.com/cli>
+- Ollama en macOS: <https://docs.ollama.com/macos>
+- Formato Modelfile: <https://docs.ollama.com/modelfile>

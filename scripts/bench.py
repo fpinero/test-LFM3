@@ -18,6 +18,8 @@ import sys
 import time
 import urllib.request
 
+from sysinfo import mem_available_mb, rss_mb
+
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 SYSTEM = "Eres un asistente útil. Responde siempre en español, de forma breve y precisa."
 PRUEBAS = [
@@ -37,33 +39,10 @@ def post(url, path, body, timeout=900):
         return json.load(r)
 
 
-def mem_available_mb():
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) // 1024
-    except FileNotFoundError:
-        pass
-    return None
-
-
 def rss_runner_mb():
-    """RSS del proceso llama-server (o runner) que ejecuta el modelo."""
-    total = 0
-    for pid in filter(str.isdigit, os.listdir("/proc") if os.path.isdir("/proc") else []):
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmd = f.read().decode(errors="ignore")
-            if "llama-server" not in cmd and "ollama\0runner" not in cmd:
-                continue
-            with open(f"/proc/{pid}/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        total += int(line.split()[1])
-        except (FileNotFoundError, PermissionError, ProcessLookupError):
-            continue
-    return total // 1024 if total else None
+    """RSS del proceso que ejecuta el modelo (llama-server o runner de Ollama).
+    En Mac la memoria que usa la GPU (Metal) puede no reflejarse entera en la RSS."""
+    return rss_mb(["llama-server", "ollama runner"])
 
 
 def comprobar_json(texto):
