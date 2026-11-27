@@ -24,6 +24,8 @@ import sys
 import time
 import urllib.request
 
+from sysinfo import cpu_name, mem_available_mb, ram_total_mb
+
 GRIS, VERDE, AMARILLO, CIAN, MAGENTA, ROJO, FIN = ("\033[90m", "\033[92m", "\033[33m", "\033[96m",
                                                    "\033[95m", "\033[91m", "\033[0m")
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -69,24 +71,12 @@ def ruta_segura(base, ruta):
 
 
 def info_sistema():
-    cpu, mem = platform.processor() or "desconocida", {}
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("model name"):
-                    cpu = line.split(":", 1)[1].strip()
-                    break
-        with open("/proc/meminfo") as f:
-            for line in f:
-                k, v = line.split(":", 1)
-                mem[k] = int(v.split()[0])
-    except FileNotFoundError:
-        pass
+    total, disp = ram_total_mb(), mem_available_mb()
     return json.dumps({
-        "cpu": cpu,
+        "cpu": cpu_name() or platform.processor() or "desconocida",
         "hilos": os.cpu_count(),
-        "ram_total_gb": round(mem.get("MemTotal", 0) / 2**20, 1),
-        "ram_disponible_gb": round(mem.get("MemAvailable", 0) / 2**20, 1),
+        "ram_total_gb": round(total / 1024, 1) if total else None,
+        "ram_disponible_gb": round(disp / 1024, 1) if disp else None,
     }, ensure_ascii=False)
 
 

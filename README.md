@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fase 1 (Windows) y fase 2 (Linux con 8 GB) completadas; fase 3 (Mac) pendiente.
+> Estado: fases 1 (Windows) y 2 (Linux con 8 GB) completadas; fase 3 (Mac) en curso.
 
 ## Índice
 
@@ -16,10 +16,11 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
 5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram)
-6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (pendiente)
-7. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
-8. [Resolución de problemas](#resolución-de-problemas)
-9. [Referencias](#referencias)
+6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (en curso)
+7. [Chuleta de Ollama](#chuleta-de-ollama)
+8. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
+9. [Resolución de problemas](#resolución-de-problemas)
+10. [Referencias](#referencias)
 
 ## Qué es LFM3 y qué variante usamos
 
@@ -1205,11 +1206,211 @@ Con esto la cuantización de 4 bits queda validada también en una tarea agénti
 
 ## Fase 3: Mac (Apple Silicon)
 
-Pendiente. Previsto:
+Objetivo: repetir en el Mac las pruebas de Windows y Linux, comparar el formato **MLX** (propio de Apple Silicon) con el GGUF que hemos usado hasta ahora y, por fin, hacer la **comparación Pi frente a Hermes Agent** que no se pudo hacer en el PC corporativo.
 
-- Instalar Ollama (aquí sí con admin) y usar la variante MLX de 8 bits `lfm3:1.7b-mxfp8`, optimizada para Apple Silicon, repitiendo las mismas mediciones (pasos 1 y 2) para comparar con el PC Intel.
-- Repetir el mini agente y Pi.
-- **Comparación Pi frente a Hermes Agent** con las mismas cinco tareas (apartado 3.4.5), que no se pudo hacer en el PC corporativo.
+Qué cambia respecto a las fases anteriores:
+
+- **GPU integrada y memoria unificada**: en Apple Silicon la CPU y la GPU comparten la misma RAM. Ollama ejecuta el modelo en la GPU mediante Metal, así que esperamos ver `100% GPU` en `ollama ps` en lugar de `100% CPU`.
+- **Formato MLX**: además del GGUF de llama.cpp, LFM3 se publica en formato MLX, el framework de Apple para su hardware. En Ollama son tags distintos del mismo modelo:
+
+| Tag | Formato | Tamaño | Equivale a |
+|---|---|---|---|
+| `lfm3:1.7b-q8_0` | GGUF, 8 bits | 1,8 GB | El que usamos en Windows y Linux |
+| `lfm3:1.7b-mxfp8` | MLX, 8 bits en coma flotante (MXFP8) | 2,1 GB | La versión de 8 bits para Apple Silicon |
+| `lfm3:1.7b-nvfp4` | MLX, 4 bits en coma flotante (NVFP4) | 1,7 GB | La versión de 4 bits para Apple Silicon |
+| `lfm3:1.7b-qad-q4_0` | GGUF, 4 bits QAD | 1,0 GB | La recomendada en Linux con 8 GB |
+
+- **Administrador**: aquí sí, así que se instala todo de la forma estándar.
+
+### Paso M0: inventario del Mac
+
+```bash
+sw_vers                                                    # versión de macOS (Ollama necesita Sonoma 14 o superior)
+system_profiler SPHardwareDataType | grep -E "Model Name|Chip|Total Number of Cores|Memory"
+sysctl -n machdep.cpu.brand_string                         # chip
+sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}'   # RAM total
+memory_pressure | tail -1                                  # porcentaje de memoria libre
+df -h ~ | tail -1                                          # espacio en disco
+command -v brew git python3 node jq ollama                 # herramientas ya instaladas
+node -v; python3 --version; ollama --version 2>/dev/null   # versiones
+```
+
+Por qué importa cada dato:
+
+- **Chip (M1, M2, M3, M4...) y núcleos de GPU**: determinan la velocidad. En Apple Silicon el ancho de banda de memoria es muy superior al de los PC de las fases anteriores, y la generación de tokens depende sobre todo de eso.
+- **RAM**: al ser memoria unificada, el modelo y el sistema comparten la misma memoria. Con LFM3 (1 a 2 GB) no debería ser un problema en ningún Mac actual.
+- **Node.js**: Pi necesita la versión 22.19 o superior.
+- **Ollama**: si ya está instalado, comprobaremos que la versión sea reciente (LFM3 requiere 0.40.12 o superior en macOS).
+
+### Paso M1: instalar Ollama y los modelos
+
+#### M1.1 Instalar Ollama
+
+Si no está instalado, descarga la app desde <https://ollama.com/download/mac>, arrastra `Ollama.app` a Aplicaciones y ábrela. La app instala también el comando `ollama` en el terminal y deja el servidor escuchando en `http://localhost:11434`, con un icono en la barra de menús. Alternativa con Homebrew: `brew install --cask ollama`.
+
+```bash
+ollama --version
+curl -s http://localhost:11434/api/version
+```
+
+Rutas en macOS: modelos en `~/.ollama/models` y logs en `~/.ollama/logs` (`server.log` y `app.log`).
+
+#### M1.2 Descargar los dos modelos de 8 bits
+
+```bash
+ollama pull lfm3:1.7b-q8_0       # GGUF, el mismo que en Windows y Linux
+ollama pull lfm3:1.7b-mxfp8      # MLX, específico de Apple Silicon
+ollama list
+ollama show lfm3:1.7b-mxfp8
+```
+
+En `ollama show` comprueba el formato y que aparezca la capacidad `tools` en ambos.
+
+#### M1.3 Primera conversación con cada formato
+
+La misma presentación que en las fases anteriores, primero con el GGUF y después con el MLX:
+
+```bash
+ollama run lfm3:1.7b-q8_0 --verbose
+```
+
+Escribe `Hola, soy Fernando, arquitecto cloud. Preséntate en dos frases.`, anota `prompt eval rate` y `eval rate` y, sin salir, en otra terminal:
+
+```bash
+ollama ps
+```
+
+Fíjate en la columna `PROCESSOR` (esperamos `100% GPU`). Sal con `/bye` y repite con `ollama run lfm3:1.7b-mxfp8 --verbose`.
+
+#### Resultado esperado del paso M1
+
+- [ ] Ollama instalado y en versión reciente
+- [ ] `lfm3:1.7b-q8_0` y `lfm3:1.7b-mxfp8` descargados, ambos con capacidad `tools`
+- [ ] `eval rate` y `prompt eval rate` de cada formato
+- [ ] `PROCESSOR` en `ollama ps` (CPU o GPU)
+
+### Pasos siguientes (previstos)
+
+| Paso | Contenido |
+|---|---|
+| M2 | `scripts/bench.py` con los cuatro tags de la tabla anterior, con y sin razonamiento |
+| M3 | Chat (`scripts/chat.py`) y mini agente (`scripts/agente_mini.py`), ya adaptados a macOS |
+| M4 | Pi con el mejor modelo, mismas cinco tareas |
+| M5 | Hermes Agent con el mismo modelo y las mismas tareas, y **comparación Pi frente a Hermes** |
+
+
+## Chuleta de Ollama
+
+Referencia rápida de lo que más se usa en el día a día, recopilado a lo largo de las tres fases. La columna "Visto en" indica dónde lo hemos usado en este proyecto.
+
+### Comandos del terminal
+
+| Comando | Para qué sirve | Visto en |
+|---|---|---|
+| `ollama pull <modelo>` | Descargar un modelo o actualizarlo | Todas las fases |
+| `ollama list` (o `ollama ls`) | Ver los modelos descargados y su tamaño | Todas |
+| `ollama show <modelo>` | Ver arquitectura, cuantización, contexto máximo y capacidades (`tools`, `thinking`...) | Paso 1.6 |
+| `ollama show --modelfile <modelo>` | Ver el Modelfile: plantilla, parámetros por defecto y sistema | |
+| `ollama run <modelo>` | Chat interactivo en el terminal | Paso 1.7 |
+| `ollama run <modelo> --verbose` | Igual, mostrando métricas tras cada respuesta (tokens/s de prefill y generación) | Pasos 1.7 y L1 |
+| `ollama run <modelo> "pregunta"` | Respuesta única, útil en scripts | |
+| `ollama ps` | Modelos cargados en memoria: tamaño, `PROCESSOR` (CPU/GPU), contexto y cuándo se descargarán | Todas |
+| `ollama stop <modelo>` | Descargar un modelo de memoria al momento | |
+| `ollama rm <modelo>` | Borrar un modelo del disco | |
+| `ollama cp <origen> <destino>` | Copiar un modelo con otro nombre (por ejemplo, antes de personalizarlo) | |
+| `ollama create <nombre> -f Modelfile` | Crear un modelo propio a partir de un Modelfile | |
+| `ollama launch <integración> --model <modelo>` | Instalar, configurar y lanzar una herramienta conectada a Ollama (Pi, Hermes, OpenCode, Claude Code, Codex...) | Pasos 3.3 y L4 |
+| `ollama launch <integración> --config` | Solo configurar la integración, sin lanzarla | |
+| `ollama serve` | Arrancar el servidor a mano (cuando no se usa la app ni el servicio) | |
+| `ollama serve --help` | Lista completa de variables de entorno que admite el servidor | |
+
+### Comandos dentro de `ollama run`
+
+| Comando | Para qué sirve |
+|---|---|
+| `/?` | Ayuda con todos los comandos disponibles en tu versión |
+| `/set parameter num_ctx 16384` | Cambiar un parámetro para esta sesión (vale cualquiera de la tabla de parámetros) |
+| `/set system "..."` | Cambiar las instrucciones de sistema |
+| `/set think` y `/set nothink` | Activar o desactivar el razonamiento |
+| `/show info` | Información del modelo cargado |
+| `/save <nombre>` | Guardar la sesión actual (parámetros y sistema) como un modelo nuevo |
+| `/clear` | Borrar el historial de la conversación |
+| `/bye` | Salir |
+
+Los comandos con `/` pueden variar entre versiones; `/?` muestra los de la tuya.
+
+### Variables de entorno del servidor
+
+| Variable | Por defecto | Para qué sirve | Visto en |
+|---|---|---|---|
+| `OLLAMA_MODELS` | `~/.ollama/models` (Mac y Windows), `/usr/share/ollama/.ollama/models` (Linux) | Carpeta donde se guardan los modelos | Paso 1.3 |
+| `OLLAMA_CONTEXT_LENGTH` | 4096 | Contexto por defecto cuando la petición no fija `num_ctx` (por ejemplo, desde la API compatible con OpenAI) | Pasos 3.3 y L4 |
+| `OLLAMA_KEEP_ALIVE` | 5m | Tiempo que el modelo sigue en memoria sin uso. `-1` = siempre, `0` = descargar al terminar | Paso L4 |
+| `OLLAMA_HOST` | `127.0.0.1:11434` | Dirección y puerto. `0.0.0.0:11434` lo expone a la red local (con cuidado: no tiene autenticación) | |
+| `OLLAMA_NUM_PARALLEL` | 1 | Peticiones simultáneas por modelo. La memoria del contexto se multiplica por este valor | |
+| `OLLAMA_MAX_LOADED_MODELS` | 3 (por GPU) | Cuántos modelos distintos pueden estar cargados a la vez | |
+| `OLLAMA_MAX_QUEUE` | 512 | Peticiones en cola antes de responder con error 503 | |
+| `OLLAMA_FLASH_ATTENTION` | Automático | `1` fuerza Flash Attention, `0` lo desactiva. Reduce memoria con contextos grandes | |
+| `OLLAMA_KV_CACHE_TYPE` | `f16` | Cuantiza la caché KV: `q8_0` (mitad de memoria) o `q4_0` (una cuarta parte). Requiere Flash Attention | |
+| `OLLAMA_ORIGINS` | Solo local | Orígenes web permitidos (extensiones de navegador, apps web) | |
+| `OLLAMA_NO_CLOUD` | Sin definir | `1` desactiva las funciones en la nube de Ollama | |
+| `HTTPS_PROXY` | Sin definir | Proxy para descargar modelos detrás de un proxy corporativo | |
+
+**Cómo se definen** (la lección que hemos aprendido en cada sistema):
+
+| Sistema | Cómo | Después |
+|---|---|---|
+| Windows | `[Environment]::SetEnvironmentVariable("VAR", "valor", "User")` (no `$env:`, que solo dura en esa ventana) | Salir de Ollama desde la bandeja y volver a abrirlo |
+| Linux (servicio systemd) | `sudo systemctl edit ollama` y `Environment="VAR=valor"` en `[Service]` (no `.bashrc`) | `sudo systemctl restart ollama` |
+| macOS (app) | `launchctl setenv VAR valor` | Salir de Ollama desde la barra de menús y volver a abrirlo |
+
+### Parámetros del modelo
+
+Se pueden fijar en cada petición a la API (`options`), en `ollama run` con `/set parameter` o de forma permanente en un Modelfile con `PARAMETER`.
+
+| Parámetro | Por defecto de Ollama | Recomendado para LFM3 | Para qué sirve |
+|---|---|---|---|
+| `num_ctx` | 4096 | 4096 para chat, 32768 para agentes | Tamaño de la ventana de contexto en tokens |
+| `temperature` | 0.8 | **0.1** (1.0 para matemáticas) | Aleatoriedad. Bajo = respuestas más deterministas |
+| `top_k` | 40 | **50** (20 para matemáticas) | Solo elige entre los K tokens más probables |
+| `top_p` | 0.9 | 0.95 solo para matemáticas | Solo elige entre los tokens que suman esa probabilidad |
+| `repeat_penalty` | 1.0 | **1.1** | Penaliza repetir texto |
+| `num_predict` | -1 (sin límite) | | Máximo de tokens a generar. Útil para cortar respuestas largas (pero puede cortar el razonamiento a medias) |
+| `seed` | 0 (aleatorio) | Un número fijo para pruebas | Hace las respuestas reproducibles |
+| `stop` | | | Textos que detienen la generación |
+
+### Opciones de la API (`/api/chat`)
+
+| Campo | Para qué sirve | Visto en |
+|---|---|---|
+| `messages` | Historial completo de la conversación (`system`, `user`, `assistant`, `tool`) | `chat.py` |
+| `tools` | Lista de herramientas en JSON Schema que el modelo puede pedir | `agente_mini.py` |
+| `think` | `true`/`false`: activa o desactiva el razonamiento **en cada petición** | Pasos 2 y L2 |
+| `format` | `"json"` o un JSON Schema completo: obliga a que la respuesta cumpla esa estructura | |
+| `stream` | `true` devuelve el texto a medida que se genera | `chat.py` |
+| `keep_alive` | Igual que `OLLAMA_KEEP_ALIVE`, pero para esta petición (`0` descarga el modelo) | `bench.py` |
+| `options` | Parámetros del modelo de la tabla anterior | Todos los scripts |
+
+La API compatible con OpenAI (`/v1/chat/completions`) es la que usan Pi, Hermes y la mayoría de herramientas. Es cómoda, pero **no permite fijar `num_ctx` por petición**: por eso hay que subir `OLLAMA_CONTEXT_LENGTH` en el servidor.
+
+### Modelfile: personalizar un modelo
+
+Un Modelfile permite crear una variante con los parámetros recomendados ya fijados, para no tener que pasarlos en cada petición:
+
+```text
+FROM lfm3:1.7b-q8_0
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx 32768
+SYSTEM "Eres un asistente técnico. Responde en español, de forma breve y precisa."
+```
+
+```bash
+ollama create lfm3-agente -f Modelfile
+ollama run lfm3-agente
+```
+
 
 ## Plan B: llama.cpp portable
 
@@ -1251,3 +1452,7 @@ Solo si Ollama no se puede instalar. Se documentará en detalle si llegamos a ne
 - Hermes con Ollama: <https://docs.ollama.com/integrations/hermes>
 - Instalación de Hermes Agent: <https://hermes-agent.nousresearch.com/docs/getting-started/installation>
 - Hermes en Windows nativo: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
+- Preguntas frecuentes y variables de entorno de Ollama: <https://docs.ollama.com/faq>
+- Comandos de Ollama: <https://docs.ollama.com/cli>
+- Ollama en macOS: <https://docs.ollama.com/macos>
+- Formato Modelfile: <https://docs.ollama.com/modelfile>

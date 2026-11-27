@@ -20,6 +20,8 @@ import sys
 import time
 import urllib.request
 
+from sysinfo import mem_available_mb, rss_mb
+
 DEFAULT_SYSTEM = ("Eres un asistente útil. Responde siempre en español, de forma breve y precisa. "
                   "Si no sabes algo, dilo en lugar de inventarlo.")
 
@@ -34,31 +36,9 @@ def api_get(url, path):
         return json.load(r)
 
 
-def mem_available_mb():
-    """RAM disponible según el kernel (la columna 'available' de free)."""
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) // 1024
-    return None
-
-
 def rss_ollama_mb():
-    """Suma la RSS de los procesos cuyo nombre o comando contiene ollama o llama."""
-    total = 0
-    for pid in filter(str.isdigit, os.listdir("/proc")):
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmd = f.read().replace(b"\0", b" ").decode(errors="ignore")
-            if "ollama" not in cmd and "llama" not in cmd:
-                continue
-            with open(f"/proc/{pid}/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        total += int(line.split()[1])
-        except (FileNotFoundError, PermissionError, ProcessLookupError):
-            continue
-    return total // 1024
+    """RSS de los procesos de Ollama y del runner que ejecuta el modelo."""
+    return rss_mb(["ollama", "llama-server"])
 
 
 def loaded_model(url, model):
@@ -76,7 +56,7 @@ def show_stats(url, model):
     if m:
         print(f"{GRIS}  modelo en memoria: {m['size'] // 2**20} MB (en GPU: {m.get('size_vram', 0) // 2**20} MB), "
               f"contexto {m.get('context_length', '?')}{FIN}")
-    if sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
         print(f"{GRIS}  RAM disponible: {mem_available_mb()} MB | RSS procesos ollama/llama: {rss_ollama_mb()} MB{FIN}")
 
 
@@ -90,7 +70,7 @@ def main():
     p.add_argument("--url", default="http://localhost:11434")
     a = p.parse_args()
 
-    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metricas-linux.csv")
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"metricas-{'mac' if sys.platform == 'darwin' else 'linux'}.csv")
 
     try:
         version = api_get(a.url, "/api/version")["version"]
@@ -200,7 +180,7 @@ def main():
                             "ram_disponible_mb", "pregunta"])
             w.writerow([dt.datetime.now().isoformat(timespec="seconds"), a.model, turn, a.num_ctx, not a.no_think,
                         p_tok, prefill, e_tok, decode, round(ttft, 2), round(final.get("total_duration", 0) / ns, 3),
-                        m["size"] // 2**20 if m else "", mem_available_mb() if sys.platform.startswith("linux") else "",
+                        m["size"] // 2**20 if m else "", mem_available_mb() or "",
                         prompt])
 
 
