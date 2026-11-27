@@ -4,7 +4,7 @@ Guía didáctica, paso a paso, para desplegar en local el modelo de texto **Liqu
 
 La primera fase se realiza en un PC Windows corporativo **sin permisos de administrador**. Más adelante se repetirá en un Mac (Apple Silicon), donde se usará otro formato del modelo (MLX).
 
-> Estado: fases 1 (Windows) y 2 (Linux con 8 GB) completadas; fase 3 (Mac) en curso.
+> Estado: las tres fases (Windows, Linux con 8 GB y Mac) completadas.
 
 ## Índice
 
@@ -16,7 +16,7 @@ La primera fase se realiza en un PC Windows corporativo **sin permisos de admini
    - [Paso 2: chatbot básico y medición de eficiencia](#paso-2-chatbot-básico-y-medición-de-eficiencia)
    - [Paso 3: arnés agéntico con tool use](#paso-3-arnés-agéntico-con-tool-use)
 5. [Fase 2: Linux con 8 GB de RAM](#fase-2-linux-con-8-gb-de-ram)
-6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon) (en curso)
+6. [Fase 3: Mac (Apple Silicon)](#fase-3-mac-apple-silicon)
 7. [Chuleta de Ollama](#chuleta-de-ollama)
 8. [Plan B: llama.cpp portable](#plan-b-llamacpp-portable)
 9. [Resolución de problemas](#resolución-de-problemas)
@@ -1506,7 +1506,7 @@ Salida de `hermes prompt-size`:
 | Esquemas de herramientas | 14,4 KB (11 herramientas: `file` 5,0 KB, `skills` 4,6 KB, `terminal` 2,6 KB, otras 2,2 KB) |
 | **Total por petición** | **~23,5 KB, unos 6.000 tokens** |
 
-Es aproximadamente **diez veces el prompt base de Pi**. En el Mac no debería notarse mucho: el *prefill* en GPU es rápido y Ollama reutiliza la caché del prompt entre turnos. Dos cosas que no aportan nada con LFM3: el índice de *skills* (`p5js`, `songwriting-and-ai-music`, `manim-video`...) y la herramienta `vision`, porque nuestro modelo es solo de texto. Las dejamos en la primera pasada para medir Hermes tal como viene, y las quitamos en el apartado M4.5.
+Es aproximadamente **diez veces el prompt base de Pi**. En el Mac no debería notarse mucho: el *prefill* en GPU es rápido y Ollama reutiliza la caché del prompt entre turnos. Dos cosas que no aportan nada con LFM3: el índice de *skills* (`p5js`, `songwriting-and-ai-music`, `manim-video`...) y la herramienta `vision`, porque nuestro modelo es solo de texto. Las dejamos en la primera pasada para medir Hermes tal como viene, y las quitamos en el apartado opcional M4.6.
 
 #### M4.4 Mismas tareas que con Pi
 
@@ -1517,15 +1517,45 @@ hermes
 
 Las cinco tareas de siempre (apartado M3.4), copiadas tal cual. Para cada una fíjate en: tiempo aproximado, si acierta, cuántas herramientas usa y si se atasca. En otra terminal, `ollama ps` debe mostrar `CONTEXT 65536`.
 
-| Tarea | Pi: tiempo | Pi: resultado | Hermes: tiempo | Hermes: resultado |
-|---|---|---|---|---|
-| 1. Versiones | Segundos | Correcto | | |
-| 2. Crear notas.md | Segundos | Correcto | | |
-| 3. Editar notas.md | Segundos | Correcto (ventaja poco ligada a privacidad) | | |
-| 4. Facturas a JSON | Segundos | Correcto tras 3 scripts fallidos | | |
-| 5. Validar y sumar | Segundos | Correcto (1.772,30) | | |
+#### M4.5 Resultados: Pi frente a Hermes (27/11/2026)
 
-#### M4.5 (Opcional) Adelgazar Hermes
+`ollama ps` durante la prueba: `lfm3:1.7b-q8_0`, 2,1 GB (100 MB más que con 32K de contexto), `100% GPU`, contexto `65536`.
+
+Hermes muestra al final de cada tarea su duración y lo que hizo; Pi no, así que para Pi solo tenemos la impresión de "unos segundos".
+
+| Tarea | Pi | Hermes |
+|---|---|---|
+| 1. Versiones | Correcto. Git 2.56.0 | Correcto en 12,4 s (un comando). Git 2.50.1 (Apple Git) |
+| 2. Crear notas.md | Correcto, relee el fichero para verificarlo | Correcto en 6,2 s, sin releerlo (se fía de la confirmación de la herramienta) |
+| 3. Editar notas.md | Correcto con `edit`; ventaja poco ligada a la privacidad | Correcto en 10,9 s; reescribe el fichero entero con `write_file`; ventaja *Privacidad total*, bien enfocada |
+| 4. Facturas a JSON | Correcto tras 3 scripts de Python fallidos | **Perfecto a la primera en 27,1 s**, extrayendo los datos él mismo, sin código |
+| 5. Validar y sumar | Correcto (1.772,30) con `json.load` | Correcto en 13,3 s con `python3 -m json.tool`, más tabla de detalle y aviso de coma flotante |
+| **Total** | Unos segundos por tarea | **70 s las cinco tareas** |
+
+Impresión de Fernando: *"Hermes ha funcionado muy rápido, ha tenido que pensar menos que Pi para llegar a las soluciones, se ve un arnés más trabajado"*.
+
+Lo que nos enseña:
+
+- **Un prompt diez veces mayor no ha hecho a Hermes más lento ni más torpe**, al contrario. En una GPU el coste de procesar ~6.000 tokens de prompt es de décimas de segundo, y Ollama reaprovecha la caché entre turnos. En el portátil Linux, a 17 tok/s de *prefill*, ese mismo prompt costaría unos 6 minutos en la primera petición: **el tamaño del arnés importa mucho en CPU y poco en GPU**.
+- **Las instrucciones del arnés guían a un modelo pequeño**: los razonamientos de Hermes son de 1 a 10 s y van más al grano. En la tarea 4 extrajo los datos directamente en lugar de programar un *parser*, que es justo lo que a Pi le salió mal. Parte del mérito puede ser también que el prompt de Pi en este Mac arrastra *skills* y extensiones de usos anteriores.
+- **Hermes confía en sus herramientas**: no relee lo que escribe porque `write_file` le devuelve los bytes escritos y la ruta. Es más rápido, pero en la tarea 3 reescribió el fichero completo en lugar de añadir una línea; con ficheros grandes eso es más arriesgado (y más lento) que un `patch`.
+- **Cada arnés ve un `PATH` distinto**: Pi encontró el Git de Homebrew (2.56.0) y Hermes el de Apple (`/usr/bin/git`, 2.50.1). Hermes ejecuta los comandos en su propio entorno y no carga la configuración de la shell igual que una terminal interactiva. Si un agente tiene que usar una versión concreta de una herramienta, conviene comprobar qué ve.
+- **El contexto de 64K apenas cuesta memoria**: 2,1 GB frente a 2,0 GB con 32K, gracias a las 6 capas de atención de LFM3.
+
+### Conclusiones de la fase Mac
+
+- **En Apple Silicon M1 Pro, GGUF gana a MLX**: `q8_0` a 77 tok/s frente a 62 de `mxfp8`, y `qad-q4_0` a 115 tok/s como opción más rápida. La calidad es la misma en los cuatro formatos.
+- **Con 75 a 115 tok/s el razonamiento deja de ser un problema**, así que se puede dejar activado y aprovechar su mejor fiabilidad.
+- **En el Mac Hermes es mejor opción que Pi** para tareas agénticas con LFM3: más rápido en la práctica, menos razonamiento y mejores decisiones. En un equipo sin GPU (como el portátil Linux) Pi sigue siendo la opción sensata por su prompt mínimo.
+- **Configuración recomendada para el Mac**: Ollama con `OLLAMA_CONTEXT_LENGTH=65536` y `OLLAMA_KEEP_ALIVE=30m` (vía `launchctl setenv`), `lfm3:1.7b-q8_0` (o `qad-q4_0` si se busca velocidad) y Hermes configurado con `ollama launch hermes`.
+
+| Equipo | Generación Q8 | Mejor formato | Arnés recomendado |
+|---|---|---|---|
+| Windows, Core Ultra 5, 31 GB (CPU) | ~24 tok/s | `q8_0` | Pi (Hermes bloqueado por Defender) |
+| Linux, i5-5200U, 8 GB (CPU) | ~5,8 tok/s | `qad-q4_0` (10 tok/s) | Pi |
+| Mac M1 Pro, 16 GB (GPU) | ~77 tok/s | `q8_0` o `qad-q4_0` (115 tok/s) | Hermes |
+
+#### M4.6 (Opcional) Adelgazar Hermes
 
 Si va lento o se confunde eligiendo herramientas, desactiva los conjuntos que no hacen falta (con LFM3, `skills` y `vision` son los candidatos claros: unos 8 KB menos) y repite la tarea 4:
 
@@ -1534,7 +1564,7 @@ hermes tools          # activar o desactivar conjuntos de herramientas
 hermes prompt-size    # comprobar cuánto ha bajado el prompt
 ```
 
-#### M4.6 Desinstalar (cuando acabemos)
+#### M4.7 Desinstalar (cuando acabemos)
 
 ```bash
 hermes uninstall --dry-run   # muestra qué borraría
