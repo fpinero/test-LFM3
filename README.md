@@ -1418,11 +1418,116 @@ Las mismas cinco del apartado 3.3.4, en `~/pi-sandbox`:
 
 Anota el **tiempo aproximado de cada tarea** (con un cronómetro o mirando la hora): será la referencia para comparar con Hermes en el paso M4.
 
-### Pasos siguientes
+#### M3.5 Resultados (27/11/2026)
 
-| Paso | Contenido |
+`ollama ps` confirma que `launchctl setenv` funcionó: `lfm3:1.7b-q8_0`, 2,0 GB, `100% GPU`, contexto `32768`, runner `llamacpp` y `29 minutes from now`.
+
+| Tarea | Resultado | Observaciones |
+|---|---|---|
+| 1. Versiones | Correcto | `node --version` y `git --version` (v26.11.1 y 2.56.0), respuesta en una tabla |
+| 2. Crear notas.md | Correcto | Escribe el fichero y lo relee para verificarlo |
+| 3. Editar notas.md | Correcto, con matiz | Usa `edit` sobre la última línea, pero la "ventaja de privacidad" que añade es *Independencia de proveedores*, relacionada con la privacidad solo de forma indirecta |
+| 4. Facturas a JSON | Correcto al cuarto intento | Intenta tres scripts de Python para extraer los datos y los tres fallan (expresión regular mal hecha, `int('mar')`, desempaquetado incorrecto); al final escribe el JSON directamente con los datos que ya había extraído en su razonamiento, y lo hace perfecto |
+| 5. Validar y sumar | Correcto | Valida con `python3 -c "import json..."`, obtiene `1772.3000000000002` y explica que es un artefacto de coma flotante: el total es 1.772,30 € |
+
+Impresión de Fernando: *"todo ha ido súper fluido con Pi, todas las tareas se han ejecutado muy rápidas"*. No hizo falta cronometrar: cada tarea tardó unos pocos segundos, frente a minutos en el portátil Linux.
+
+Lo que nos enseña:
+
+- **La velocidad cambia la experiencia**: con 77 tok/s el razonamiento (en inglés, como siempre) y los reintentos pasan casi desapercibidos. En Linux los tres scripts fallidos de la tarea 4 habrían costado varios minutos.
+- **El modelo extrae datos mejor que programa un extractor**: el razonamiento ya tenía los cuatro campos bien sacados desde el principio, pero se empeñó en escribir un *parser* y falló tres veces. Con un modelo de 1,7B, para textos cortos conviene pedirle explícitamente que extraiga él mismo los datos ("sin escribir código").
+- **Sabe recuperarse**: ante los errores no entró en bucle, cambió de estrategia y terminó bien. También detectó solo el problema de coma flotante de la tarea 5.
+- **Ojo con lo que Pi carga al arrancar**: en este Mac Pi ya tenía *skills* (`find-skills`, `hyperframes`...) y la extensión `@ollama/pi-web-search` instaladas de usos anteriores. Todo eso se añade al prompt de cada petición; para comparar de forma justa con Hermes hay que tenerlo en cuenta.
+
+### Paso M4: Hermes Agent en el Mac
+
+Ahora sí, la prueba que no pudimos hacer en el PC del trabajo (ver [3.4](#34-hermes-agent)): **¿aporta algo un arnés grande como Hermes con un modelo de 1,7B, o su prompt lo hace más lento y torpe que Pi?** En el Mac eres administrador y no hay reglas ASR, así que el instalador debería funcionar sin problemas.
+
+#### M4.1 Subir el contexto a 64K
+
+Hermes **exige al menos 64.000 tokens de contexto** y rechaza al arrancar modelos con menos. Subimos el del servidor (con las 6 capas de atención de LFM3 la memoria apenas crece):
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 65536
+```
+
+Sal de Ollama desde la barra de menús y vuelve a abrirlo. Si quieres volver a Pi más adelante, 64K también le sirve (o deja `contextWindow` en 32768, que sigue siendo coherente porque es menor que el real).
+
+#### M4.2 Instalar Hermes revisando antes el script
+
+La documentación propone `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`, pero igual que en Windows es mejor descargarlo y leerlo antes de ejecutarlo:
+
+```bash
+mkdir -p ~/hermes-install && cd ~/hermes-install
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o install-hermes.sh
+less install-hermes.sh          # échale un vistazo; q para salir
+bash install-hermes.sh --skip-browser --skip-computer-use
+```
+
+`--skip-browser` y `--skip-computer-use` evitan descargar Chromium y el controlador de *computer use*, que no necesitamos. Al terminar:
+
+```bash
+source ~/.zshrc
+hermes --version
+hermes doctor        # revisa la configuración y las dependencias
+```
+
+Dónde queda cada cosa:
+
+| Ruta | Contenido |
 |---|---|
-| M4 | Hermes Agent con el mismo modelo y las mismas tareas, y **comparación Pi frente a Hermes** |
+| `~/.hermes/hermes-agent/` | Código fuente |
+| `~/.local/bin/hermes` | Lanzador |
+| `~/.hermes/config.yaml` | Configuración (proveedor, modelo, herramientas) |
+| `~/.hermes/.env` | Secretos (claves de API; aquí no habrá ninguno) |
+
+#### M4.3 Conectar Hermes con LFM3
+
+```bash
+ollama launch hermes
+```
+
+En el selector elige `lfm3:1.7b-q8_0` y, si pregunta por mensajería (Telegram, Slack...), sáltalo. Ollama configura Hermes con el endpoint `http://127.0.0.1:11434/v1` y lo arranca; sal con `/exit` o `Ctrl+D` para hacer antes dos comprobaciones:
+
+```bash
+cat ~/.hermes/config.yaml
+hermes prompt-size      # tamaño del system prompt y de las herramientas
+```
+
+**Anota lo que muestre `hermes prompt-size`**: es la cifra clave de la comparación. Si `ollama launch hermes` diera problemas, la alternativa es `hermes model` > *More providers...* > *Custom endpoint*, URL `http://127.0.0.1:11434/v1`, sin clave de API y modelo `lfm3:1.7b-q8_0`.
+
+#### M4.4 Mismas tareas que con Pi
+
+```bash
+mkdir -p ~/hermes-sandbox && cd ~/hermes-sandbox
+hermes
+```
+
+Las cinco tareas de siempre (apartado M3.4), copiadas tal cual. Para cada una fíjate en: tiempo aproximado, si acierta, cuántas herramientas usa y si se atasca. En otra terminal, `ollama ps` debe mostrar `CONTEXT 65536`.
+
+| Tarea | Pi: tiempo | Pi: resultado | Hermes: tiempo | Hermes: resultado |
+|---|---|---|---|---|
+| 1. Versiones | Segundos | Correcto | | |
+| 2. Crear notas.md | Segundos | Correcto | | |
+| 3. Editar notas.md | Segundos | Correcto (ventaja poco ligada a privacidad) | | |
+| 4. Facturas a JSON | Segundos | Correcto tras 3 scripts fallidos | | |
+| 5. Validar y sumar | Segundos | Correcto (1.772,30) | | |
+
+#### M4.5 (Opcional) Adelgazar Hermes
+
+Si va lento o se confunde eligiendo herramientas, desactiva los conjuntos que no hacen falta y repite la tarea 4:
+
+```bash
+hermes tools          # activar o desactivar conjuntos de herramientas
+hermes prompt-size    # comprobar cuánto ha bajado el prompt
+```
+
+#### M4.6 Desinstalar (cuando acabemos)
+
+```bash
+hermes uninstall --dry-run   # muestra qué borraría
+hermes uninstall --full      # elimina también configuración y datos
+```
 
 
 ## Chuleta de Ollama
