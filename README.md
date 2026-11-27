@@ -1496,6 +1496,18 @@ hermes prompt-size      # tamaño del system prompt y de las herramientas
 
 **Anota lo que muestre `hermes prompt-size`**: es la cifra clave de la comparación. Si `ollama launch hermes` diera problemas, la alternativa es `hermes model` > *More providers...* > *Custom endpoint*, URL `http://127.0.0.1:11434/v1`, sin clave de API y modelo `lfm3:1.7b-q8_0`.
 
+**Lo que configuró `ollama launch hermes` en el Mac (27/11/2026)**: una configuración ya bastante adelgazada. Deja activos en la CLI solo los conjuntos `file`, `skills`, `terminal` y `vision` (11 herramientas), y desactiva el resto: navegador, web, memoria, subagentes, cron, generación de imágenes, mensajería... También deja la memoria persistente y la compresión del historial desactivadas, `reasoning_effort: medium` y avisos de bucles de herramientas (`tool_loop_guardrails`) activados.
+
+Salida de `hermes prompt-size`:
+
+| Bloque | Tamaño |
+|---|---|
+| System prompt | 9,1 KB (de ellos 3,4 KB son el índice de 43 *skills* incluidas) |
+| Esquemas de herramientas | 14,4 KB (11 herramientas: `file` 5,0 KB, `skills` 4,6 KB, `terminal` 2,6 KB, otras 2,2 KB) |
+| **Total por petición** | **~23,5 KB, unos 6.000 tokens** |
+
+Es aproximadamente **diez veces el prompt base de Pi**. En el Mac no debería notarse mucho: el *prefill* en GPU es rápido y Ollama reutiliza la caché del prompt entre turnos. Dos cosas que no aportan nada con LFM3: el índice de *skills* (`p5js`, `songwriting-and-ai-music`, `manim-video`...) y la herramienta `vision`, porque nuestro modelo es solo de texto. Las dejamos en la primera pasada para medir Hermes tal como viene, y las quitamos en el apartado M4.5.
+
 #### M4.4 Mismas tareas que con Pi
 
 ```bash
@@ -1515,7 +1527,7 @@ Las cinco tareas de siempre (apartado M3.4), copiadas tal cual. Para cada una f�
 
 #### M4.5 (Opcional) Adelgazar Hermes
 
-Si va lento o se confunde eligiendo herramientas, desactiva los conjuntos que no hacen falta y repite la tarea 4:
+Si va lento o se confunde eligiendo herramientas, desactiva los conjuntos que no hacen falta (con LFM3, `skills` y `vision` son los candidatos claros: unos 8 KB menos) y repite la tarea 4:
 
 ```bash
 hermes tools          # activar o desactivar conjuntos de herramientas
