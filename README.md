@@ -1284,16 +1284,63 @@ Fíjate en la columna `PROCESSOR` (esperamos `100% GPU`). Sal con `/bye` y repit
 
 #### Resultado esperado del paso M1
 
-- [ ] Ollama instalado y en versión reciente
-- [ ] `lfm3:1.7b-q8_0` y `lfm3:1.7b-mxfp8` descargados, ambos con capacidad `tools`
-- [ ] `eval rate` y `prompt eval rate` de cada formato
-- [ ] `PROCESSOR` en `ollama ps` (CPU o GPU)
+- [x] Ollama instalado
+- [x] `lfm3:1.7b-q8_0` y `lfm3:1.7b-mxfp8` descargados
+- [x] `eval rate` y `prompt eval rate` de cada formato
+- [x] `PROCESSOR` en `ollama ps`: 100 % GPU en ambos
 
-### Pasos siguientes (previstos)
+#### Resultados del paso M1 (27/11/2026)
+
+Misma presentación que en las fases anteriores, con `ollama run --verbose`:
+
+| Métrica | GGUF `lfm3:1.7b-q8_0` | MLX `lfm3:1.7b-mxfp8` |
+|---|---|---|
+| `prompt eval rate` (prefill) | 121,73 tok/s | 18,01 tok/s |
+| `eval rate` (generación) | **74,68 tok/s** | **61,71 tok/s** |
+| Tokens generados (con razonamiento) | 153 | 138 |
+| Tiempo total | **2,3 s** | 4,3 s |
+| `ollama ps`: tamaño, procesador | 1,9 GB, **100 % GPU** | 2,0 GB, **100 % GPU** |
+| `ollama ps`: runner | `llamacpp` | `mlx` |
+
+Comparación con las otras máquinas (GGUF Q8, misma pregunta):
+
+| Equipo | Generación | Tiempo total |
+|---|---|---|
+| Linux, i5-5200U (CPU) | 4,89 tok/s | 34,6 s |
+| Windows, Core Ultra 5 135U (CPU) | 23,83 tok/s | 14,9 s |
+| **Mac, Apple Silicon (GPU)** | **74,68 tok/s** | **2,3 s** |
+
+Conclusiones:
+
+- **El Mac es unas 3 veces más rápido que el PC Windows y 15 veces más que el portátil Linux.** La diferencia viene de la GPU integrada y, sobre todo, del ancho de banda de la memoria unificada de Apple Silicon, que es lo que limita la generación de tokens. Con razonamiento incluido, la respuesta completa tarda 2,3 s: la experiencia es fluida incluso dejando pensar al modelo.
+- **Ollama usa motores distintos según el formato**: la columna `RUNNER` muestra `llamacpp` para el GGUF y `mlx` para el MLX. Es el mismo modelo, servido por dos motores de inferencia diferentes.
+- **Sorpresa: el GGUF fue más rápido que el MLX** (74,7 frente a 61,7 tok/s en generación). Hay que tomarlo con cautela: es una sola medida, el MXFP8 ocupa algo más (2,0 frente a 1,9 GB) y el **prefill tan bajo del MLX (18 tok/s)** apunta a un coste de arranque en la primera petición (compilación de los *kernels* de Metal), no a su velocidad real. El banco de pruebas del paso M2, con repeticiones, lo aclarará.
+- **Dos modelos cargados a la vez**: `ollama ps` mostraba los dos modelos en memoria al mismo tiempo. Ollama mantiene varios modelos cargados si caben (`OLLAMA_MAX_LOADED_MODELS`, por defecto 3) y cada uno se descarga al acabar su `keep_alive`. En el portátil de 8 GB esto habría sido un problema; aquí no.
+
+### Paso M2: banco de pruebas con los cuatro formatos
+
+Con `scripts/bench.py` comparamos los cuatro tags de la tabla del principio de esta fase, con y sin razonamiento y con dos repeticiones (la primera petición de cada modelo hace de calentamiento):
+
+```bash
+cd ~/my_Repos/test-LFM3
+git pull
+ollama pull lfm3:1.7b-nvfp4
+ollama pull lfm3:1.7b-qad-q4_0
+python3 scripts/bench.py --models lfm3:1.7b-q8_0 lfm3:1.7b-mxfp8 lfm3:1.7b-qad-q4_0 lfm3:1.7b-nvfp4 --repeticiones 2
+```
+
+En el Mac debería tardar pocos minutos. El script descarga cada modelo antes de cargar el siguiente, para que las medidas no se interfieran. En macOS las columnas de memoria son aproximadas: la memoria que usa la GPU no siempre se refleja en la RSS del proceso, así que la referencia fiable es el tamaño de `ollama ps`.
+
+Preguntas que queremos responder:
+
+1. ¿El MLX es más lento de verdad o era el calentamiento?
+2. ¿Cuánto se gana con 4 bits en una GPU, donde el cuello de botella es menor que en CPU?
+3. ¿Se mantiene la calidad del JSON en los cuatro formatos?
+
+### Pasos siguientes
 
 | Paso | Contenido |
 |---|---|
-| M2 | `scripts/bench.py` con los cuatro tags de la tabla anterior, con y sin razonamiento |
 | M3 | Chat (`scripts/chat.py`) y mini agente (`scripts/agente_mini.py`), ya adaptados a macOS |
 | M4 | Pi con el mejor modelo, mismas cinco tareas |
 | M5 | Hermes Agent con el mismo modelo y las mismas tareas, y **comparación Pi frente a Hermes** |
