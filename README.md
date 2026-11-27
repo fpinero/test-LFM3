@@ -56,11 +56,11 @@ La cuantización reduce la precisión de los pesos para que el modelo ocupe meno
 
 | | Fase 1 | Fase 2 | Fase 3 |
 |---|---|---|---|
-| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | Mac (Apple Silicon) |
-| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | Por definir |
+| Equipo | PC del trabajo, Intel Core Ultra 5 135U (12 núcleos, 14 hilos) con NPU | Portátil, Intel Core i5-5200U (2 núcleos, 4 hilos, AVX2) | MacBook con **Apple M1 Pro** |
+| RAM | 31,4 GB visibles (inicialmente se pensaba que eran 16 GB) | **7,7 GiB** (2,8 GiB disponibles en reposo) + 12 GiB de swap | **16 GB** de memoria unificada (CPU y GPU) |
 | Sistema | Windows | Ubuntu 24.04.5 LTS | macOS |
 | Permisos | **Sin administrador** | root / sudo | Administrador |
-| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | MLX 8 bits |
+| Formato del modelo | GGUF Q8_0 | GGUF Q8_0 (y Q4_K_M para comparar) | GGUF y MLX, 8 y 4 bits |
 | Objetivo | Aprender el despliegue | Forzar los límites con poca RAM | Comparar MLX y Pi frente a Hermes |
 
 Nota sobre la NPU: ni Ollama ni llama.cpp usan la NPU de Intel; el modelo correrá en la CPU, que es justo para lo que está diseñado LFM3. Aprovechar la NPU requeriría la pila OpenVINO de Intel y una conversión del modelo, algo que queda fuera de esta primera prueba.
@@ -1337,13 +1337,92 @@ Preguntas que queremos responder:
 2. ¿Cuánto se gana con 4 bits en una GPU, donde el cuello de botella es menor que en CPU?
 3. ¿Se mantiene la calidad del JSON en los cuatro formatos?
 
+#### Resultados del paso M2 (27/11/2026)
+
+Equipo: **Apple M1 Pro con 16 GB** de memoria unificada. Salida de `bench.py` con los cuatro formatos y 2 repeticiones (`num_ctx` 4096):
+
+| Modelo | Formato / motor | Razonamiento | Generación media (tok/s) | Tokens medios | Tiempo medio por respuesta (s) | Tamaño en memoria (`ollama ps`) | JSON |
+|---|---|---|---|---|---|---|---|
+| `lfm3:1.7b-q8_0` | GGUF / llama.cpp | no | 77.29 | 42 | 0.7 | 1,8 GB | ok, ok |
+| `lfm3:1.7b-q8_0` | GGUF / llama.cpp | sí | 75.05 | 450 | 6.0 | | ok, ok |
+| `lfm3:1.7b-mxfp8` | MLX | no | 61.60 | 44 | 1.1 | 1,9 GB | ok, ok |
+| `lfm3:1.7b-mxfp8` | MLX | sí | 64.32 | 499 | 7.8 | | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | GGUF / llama.cpp | no | **115.20** | 54 | **0.6** | 1,1 GB | ok, ok |
+| `lfm3:1.7b-qad-q4_0` | GGUF / llama.cpp | sí | **113.14** | 669 | 6.0 | | ok, ok |
+| `lfm3:1.7b-nvfp4` | MLX | no | 72.71 | 46 | 0.9 | 1,6 GB | ok, ok |
+| `lfm3:1.7b-nvfp4` | MLX | sí | 74.99 | 678 | 9.2 | | ok, ok |
+
+La columna de RSS de `bench.py` no es comparable en el Mac: para los modelos MLX marcaba 300-450 MB porque la memoria que reserva la GPU (Metal) no se refleja en la RSS del proceso. La referencia fiable es el tamaño de `ollama ps`.
+
+Conclusiones:
+
+- **No era el calentamiento: en este Mac el GGUF es más rápido que el MLX.** Con repeticiones, la Q8 GGUF genera a 77 tok/s y la MXFP8 a 62-64, un 20 % menos. Lo mismo con 4 bits: QAD Q4_0 (GGUF) a 115 tok/s frente a NVFP4 (MLX) a 73-75.
+- **Una explicación probable: el M1 Pro no tiene soporte nativo para los formatos de coma flotante de 8 y 4 bits** (MXFP8 y NVFP4 se diseñaron pensando en GPU recientes). Al no poder calcular directamente con ellos, el chip tiene que convertir los pesos sobre la marcha, mientras que los formatos enteros de llama.cpp (Q8_0, Q4_0) tienen *kernels* de Metal muy optimizados. En chips más nuevos (M3, M4 y siguientes) el resultado podría cambiar.
+- **QAD Q4_0 es la más rápida con diferencia: 115 tok/s**, un 50 % más que la Q8. Igual que en CPU, en GPU la generación también está limitada por cuántos bytes hay que leer por token.
+- **La calidad del JSON se mantiene en los cuatro formatos** (8 de 8 correctos).
+- **A esta velocidad el razonamiento deja de ser un problema**: una respuesta con razonamiento tarda de media 6 s (frente a 85 s en el portátil Linux con Q8). En el Mac se puede dejar activado casi siempre y aprovechar su mejor fiabilidad en tareas complejas.
+- **El razonamiento sigue siendo muy variable**: de 175 a 612 tokens en la misma pregunta de Kubernetes con QAD, o de 979 a 1.117 con NVFP4.
+
+**Elección para Pi y Hermes en el Mac**: `lfm3:1.7b-q8_0`. Es la que se recomendó en la charla para tareas agénticas, la misma que usamos en Windows (comparación directa) y a 77 tok/s va sobrada. QAD Q4_0 queda como alternativa si se busca la máxima velocidad.
+
+### Paso M3: Pi en el Mac
+
+En el Mac las pruebas de chat y del mini agente serían una repetición casi instantánea de lo ya visto, así que pasamos directamente a los arneses (si quieres verlos, `python3 scripts/chat.py` y `python3 scripts/agente_mini.py` ya funcionan en macOS).
+
+#### M3.1 Node.js
+
+```bash
+node -v      # Pi necesita 22.19 o superior
+```
+
+Si no está instalado o es más antiguo: `brew install node`, y después `hash -r` y `node -v`.
+
+#### M3.2 Configurar Ollama: contexto y permanencia en memoria
+
+En macOS la app de Ollama lee las variables de entorno de `launchctl` (es el equivalente a la variable de usuario de Windows o al override de systemd de Linux):
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 32768
+launchctl setenv OLLAMA_KEEP_ALIVE 30m
+```
+
+Después **sal de Ollama desde el icono de la barra de menús** (*Quit Ollama*) y vuelve a abrirlo. Para comprobarlo, tras la primera petición `ollama ps` debe mostrar `CONTEXT 32768` y `UNTIL 29 minutes from now`.
+
+Ojo: `launchctl setenv` **no sobrevive a un reinicio del Mac**. Para hacerlo permanente hay que crear un *LaunchAgent* (un `.plist` en `~/Library/LaunchAgents` que ejecute esos comandos al iniciar sesión); para estas pruebas no hace falta.
+
+#### M3.3 Instalar y lanzar Pi
+
+```bash
+mkdir -p ~/pi-sandbox && cd ~/pi-sandbox
+ollama launch pi --model lfm3:1.7b-q8_0
+```
+
+Y desde el principio, en `~/.pi/agent/models.json`, el contexto real para que la barra de estado de Pi muestre `.../32k`:
+
+```json
+"models": [
+  { "id": "lfm3:1.7b-q8_0", "contextWindow": 32768 },
+  { "id": "lfm3:1.7b-qad-q4_0", "contextWindow": 32768 }
+]
+```
+
+#### M3.4 Tareas
+
+Las mismas cinco del apartado 3.3.4, en `~/pi-sandbox`:
+
+1. `¿Qué versiones de node y de git hay instaladas en este equipo?`
+2. `Crea un fichero notas.md con un título y una lista de 3 ventajas de usar modelos de IA en local.`
+3. `Lee notas.md y añade al final una cuarta ventaja relacionada con la privacidad.`
+4. La extracción de facturas a `facturas.json` (mismo texto que en Windows).
+5. `Valida que facturas.json es un JSON correcto ejecutando un comando y dime cuánto suman los importes.`
+
+Anota el **tiempo aproximado de cada tarea** (con un cronómetro o mirando la hora): será la referencia para comparar con Hermes en el paso M4.
+
 ### Pasos siguientes
 
 | Paso | Contenido |
 |---|---|
-| M3 | Chat (`scripts/chat.py`) y mini agente (`scripts/agente_mini.py`), ya adaptados a macOS |
-| M4 | Pi con el mejor modelo, mismas cinco tareas |
-| M5 | Hermes Agent con el mismo modelo y las mismas tareas, y **comparación Pi frente a Hermes** |
+| M4 | Hermes Agent con el mismo modelo y las mismas tareas, y **comparación Pi frente a Hermes** |
 
 
 ## Chuleta de Ollama
